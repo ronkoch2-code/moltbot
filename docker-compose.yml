@@ -1,0 +1,71 @@
+# =============================================================================
+# Moltbook MCP Server — Docker Compose
+# =============================================================================
+# Usage:
+#   1. Copy config/credentials.example.json → config/credentials.json
+#      and fill in your Moltbook API key
+#        — OR —
+#      Set MOLTBOOK_API_KEY in a .env file
+#
+#   2. docker compose up -d
+#
+#   3. Connect from Claude Code / MCP client at:
+#        http://localhost:8080
+# =============================================================================
+
+services:
+  moltbook-mcp:
+    build: .
+    container_name: moltbook-mcp-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount credentials (read-only) — keeps API key out of the image
+      - ./config:/app/config:ro
+      # Security audit logs (persistent)
+      - ./logs:/app/logs
+    environment:
+      # Alternatively, set the key directly (overrides credentials.json)
+      - MOLTBOOK_API_KEY=${MOLTBOOK_API_KEY:-}
+      - MOLTBOOK_AGENT_NAME=${MOLTBOOK_AGENT_NAME:-}
+      # HuggingFace model cache (baked into image at build time)
+      - HF_HOME=/app/.cache/huggingface
+      # Content filter ML threshold (0.0-1.0, default: 0.5)
+      - CONTENT_FILTER_THRESHOLD=${CONTENT_FILTER_THRESHOLD:-0.5}
+      # Logging level (DEBUG, INFO, WARNING, ERROR, default: INFO)
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    # --- Security hardening ---
+    read_only: true                 # Immutable filesystem
+    tmpfs:
+      - /tmp:size=10M               # Small tmpfs for Python tempfiles
+    security_opt:
+      - no-new-privileges:true       # Prevent privilege escalation
+    cap_drop:
+      - ALL                          # Drop all Linux capabilities
+    networks:
+      - moltbook-net
+
+  # Optional: a lightweight cron-style heartbeat container
+  # Uncomment to enable periodic feed browsing
+  #
+  # moltbook-heartbeat:
+  #   build: .
+  #   container_name: moltbook-heartbeat
+  #   restart: unless-stopped
+  #   entrypoint: ["python", "heartbeat.py"]
+  #   volumes:
+  #     - ./config:/app/config:ro
+  #   environment:
+  #     - MOLTBOOK_API_KEY=${MOLTBOOK_API_KEY:-}
+  #     - HEARTBEAT_INTERVAL_MINUTES=30
+  #   depends_on:
+  #     - moltbook-mcp
+  #   networks:
+  #     - moltbook-net
+
+networks:
+  moltbook-net:
+    driver: bridge
+    # Restrict to outbound-only; no inbound from host network
+    internal: false

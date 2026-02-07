@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "moltbook": {
+      "type": "streamable_http",
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+.git
+.env
+config/credentials.json
+__pycache__
+*.pyc
+*.md
+.gitignore
+.dockerignore
+docker-compose*.yml

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "moltbook": {
+      "command": "python3",
+      "args": [
+        "/Volumes/FS001/pythonscripts/moltbot/stdio_bridge.py"
+      ]
+    }
+  }
+}

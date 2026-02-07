@@ -1,0 +1,37 @@
+# Secrets and credentials
+.env
+.env.*
+!.env.example
+config/credentials.json
+heartbeat/config.json
+heartbeat/heartbeat.log
+heartbeat/heartbeat.error.log
+heartbeat/heartbeat-state.json
+logs/
+*.log
+
+# Test output
+testscript/*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Docker
+docker-compose.override.yml
+
+# IDE / Tools
+.claude/
+.idea/
+.vscode/
+*.swp
+*.swo
