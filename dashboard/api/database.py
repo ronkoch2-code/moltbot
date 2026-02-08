@@ -48,6 +48,19 @@ CREATE INDEX IF NOT EXISTS idx_runs_status ON heartbeat_runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_agent_name ON heartbeat_runs(agent_name);
 CREATE INDEX IF NOT EXISTS idx_actions_run_id ON heartbeat_actions(run_id);
 CREATE INDEX IF NOT EXISTS idx_actions_action_type ON heartbeat_actions(action_type);
+
+CREATE TABLE IF NOT EXISTS heartbeat_prompts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    version         INTEGER NOT NULL,
+    prompt_text     TEXT NOT NULL,
+    change_summary  TEXT,
+    author          TEXT NOT NULL DEFAULT 'system',
+    is_active       INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_prompts_active ON heartbeat_prompts(is_active);
+CREATE INDEX IF NOT EXISTS idx_prompts_version ON heartbeat_prompts(version);
 """
 
 
@@ -73,6 +86,28 @@ def get_connection(db_path: str | None = None) -> sqlite3.Connection:
     return conn
 
 
+def migrate_db(conn: sqlite3.Connection) -> None:
+    """Run idempotent migrations on an existing database.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open database connection.
+    """
+    # Add prompt_version_id column to heartbeat_runs if missing
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(heartbeat_runs)").fetchall()
+    }
+    if "prompt_version_id" not in columns:
+        conn.execute(
+            "ALTER TABLE heartbeat_runs ADD COLUMN prompt_version_id"
+            " INTEGER REFERENCES heartbeat_prompts(id)"
+        )
+        conn.commit()
+        logger.info("Migration: added prompt_version_id to heartbeat_runs")
+
+
 def init_db(db_path: str | None = None) -> None:
     """Initialize the database schema.
 
@@ -85,6 +120,7 @@ def init_db(db_path: str | None = None) -> None:
     try:
         conn.executescript(SCHEMA)
         conn.commit()
+        migrate_db(conn)
         logger.info("Database initialized at %s", db_path or DB_PATH)
     finally:
         conn.close()

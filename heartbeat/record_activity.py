@@ -279,6 +279,7 @@ def record_run(
     exit_code: int | None = None,
     raw_output: str | None = None,
     finished_at: str | None = None,
+    prompt_version_id: int | None = None,
 ) -> None:
     """Record a heartbeat run and its parsed actions into SQLite.
 
@@ -302,6 +303,8 @@ def record_run(
         Full raw output from Claude.
     finished_at : str | None
         ISO timestamp when the run finished.
+    prompt_version_id : int | None
+        ID of the prompt version used for this run.
     """
     init_db(db_path)
 
@@ -338,13 +341,13 @@ def record_run(
             INSERT OR REPLACE INTO heartbeat_runs
                 (run_id, started_at, finished_at, duration_seconds, exit_code,
                  status, agent_name, script_variant, run_number, raw_output,
-                 summary, error_message)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 summary, error_message, prompt_version_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id, started_at, finished_at, duration_seconds, exit_code,
                 status, agent_name, script_variant, run_number, raw_output,
-                summary, error_message,
+                summary, error_message, prompt_version_id,
             ),
         )
 
@@ -386,6 +389,10 @@ def main() -> None:
     parser.add_argument("--output-file", help="Path to file with Claude output")
     parser.add_argument("--finished-at", help="ISO timestamp for completion")
     parser.add_argument(
+        "--prompt-version", type=int, default=None,
+        help="Prompt version ID used for this run",
+    )
+    parser.add_argument(
         "--db-path",
         default=DB_PATH,
         help=f"Database path (default: {DB_PATH})",
@@ -413,6 +420,7 @@ def main() -> None:
         exit_code=args.exit_code,
         raw_output=raw_output,
         finished_at=finished_at,
+        prompt_version_id=args.prompt_version,
     )
 
     # Print summary

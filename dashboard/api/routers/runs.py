@@ -33,6 +33,7 @@ def _row_to_run(row, action_count: int = 0) -> dict:
         "summary": row["summary"],
         "error_message": row["error_message"],
         "action_count": action_count,
+        "prompt_version_id": row["prompt_version_id"],
         "created_at": row["created_at"],
     }
 

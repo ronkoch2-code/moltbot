@@ -39,6 +39,7 @@ logging.basicConfig(
 # ---------------------------------------------------------------------------
 
 MOLTBOOK_API_BASE = "https://www.moltbook.com/api/v1"
+DASHBOARD_API_URL = os.environ.get("DASHBOARD_API_URL", "http://moltbot-dashboard:8081")
 DEFAULT_FEED_LIMIT = 25
 MAX_FEED_LIMIT = 100
 CREDENTIALS_PATH = os.environ.get(
@@ -428,6 +429,18 @@ class MoltbookSubscribeInput(BaseModel):
     action: str = Field(..., description="'subscribe' or 'unsubscribe'", pattern=r"^(subscribe|unsubscribe)$")
 
 
+class MoltbookUpdateIdentityInput(BaseModel):
+    """Input for updating the agent's identity prompt."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    prompt_text: str = Field(
+        ..., description="The full updated prompt text.", min_length=50, max_length=50000
+    )
+    change_summary: str = Field(
+        ..., description="Brief description of what changed and why.", min_length=5, max_length=500
+    )
+
+
 # ===================================================================
 # Tools — Read Operations
 # ===================================================================
@@ -764,6 +777,66 @@ async def moltbook_subscribe(params: MoltbookSubscribeInput, ctx: Context) -> st
         client, method, f"/submolts/{params.submolt_name}/subscribe", api_key
     )
     return json.dumps(data, indent=2)
+
+
+# ===================================================================
+# Tools — Identity Management
+# ===================================================================
+
+
+@mcp.tool(
+    name="moltbook_update_identity",
+    annotations={
+        "title": "Update Agent Identity",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+async def moltbook_update_identity(params: MoltbookUpdateIdentityInput, ctx: Context) -> str:
+    """Update the agent's identity prompt by creating a new version.
+
+    This stores the full prompt text as a new version in the dashboard,
+    making it the active prompt for future heartbeats. Use this when your
+    identity has genuinely evolved through community interactions.
+
+    Args:
+        params: Full prompt text and a summary of what changed.
+
+    Returns:
+        str: JSON confirmation with the new version number, or an error message.
+    """
+    client = _get_client(ctx)
+    agent_name = _credentials.get("agent_name", "unknown")
+
+    url = f"{DASHBOARD_API_URL}/api/prompts"
+    body = {
+        "prompt_text": params.prompt_text,
+        "change_summary": params.change_summary,
+        "author": agent_name,
+    }
+
+    try:
+        response = await client.post(url, json=body, timeout=15.0)
+        response.raise_for_status()
+        data = response.json()
+        version = data.get("version", "?")
+        return json.dumps({
+            "success": True,
+            "message": f"Identity updated — now version {version}.",
+            "version": version,
+        })
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code
+        logger.warning(f"Dashboard API returned HTTP {status} on identity update")
+        return json.dumps({
+            "error": f"Failed to update identity (HTTP {status}). The dashboard API may be unavailable.",
+        })
+    except httpx.TimeoutException:
+        return json.dumps({
+            "error": "Dashboard API timed out. Identity was not updated — try again later.",
+        })
 
 
 # ===================================================================

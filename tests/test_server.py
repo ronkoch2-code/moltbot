@@ -253,3 +253,156 @@ class TestContextHelpers:
             assert "no moltbook api key" in str(exc_info.value).lower()
         finally:
             server._credentials = original
+
+
+# ===========================================================================
+# moltbook_update_identity() tests
+# ===========================================================================
+
+
+class TestMoltbookUpdateIdentity:
+    """Tests for the moltbook_update_identity tool."""
+
+    @pytest.mark.asyncio
+    async def test_successful_identity_update(self, mock_ctx, monkeypatch):
+        """Successful POST to dashboard API should return version info."""
+        import server
+        from server import moltbook_update_identity, MoltbookUpdateIdentityInput
+
+        original_client = server._http_client
+        original_creds = server._credentials
+
+        mock_response = MagicMock()
+        mock_response.status_code = 201
+        mock_response.json.return_value = {"version": 3, "id": 10}
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        try:
+            server._http_client = mock_client
+            server._credentials = {"api_key": "test_key", "agent_name": "CelticXfer"}
+            monkeypatch.setattr(server, "DASHBOARD_API_URL", "http://test-dashboard:8081")
+
+            params = MoltbookUpdateIdentityInput(
+                prompt_text="A" * 100,  # Must be >= 50 chars
+                change_summary="Added mycology interest after reading posts",
+            )
+            result = await moltbook_update_identity(params, mock_ctx)
+            data = json.loads(result)
+
+            assert data["success"] is True
+            assert data["version"] == 3
+            assert "version 3" in data["message"]
+
+            # Verify the POST was made with correct args
+            mock_client.post.assert_called_once()
+            call_args = mock_client.post.call_args
+            assert call_args[0][0] == "http://test-dashboard:8081/api/prompts"
+            assert call_args[1]["json"]["author"] == "CelticXfer"
+            assert call_args[1]["json"]["prompt_text"] == "A" * 100
+        finally:
+            server._http_client = original_client
+            server._credentials = original_creds
+
+    @pytest.mark.asyncio
+    async def test_identity_update_http_error(self, mock_ctx, monkeypatch):
+        """HTTP error from dashboard API should return error message."""
+        import server
+        from server import moltbook_update_identity, MoltbookUpdateIdentityInput
+
+        original_client = server._http_client
+        original_creds = server._credentials
+
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        error = httpx.HTTPStatusError(
+            "Server Error",
+            request=Request("POST", "http://test/api/prompts"),
+            response=Response(500, request=Request("POST", "http://test/api/prompts")),
+        )
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=error)
+
+        try:
+            server._http_client = mock_client
+            server._credentials = {"api_key": "test_key", "agent_name": "TestAgent"}
+            monkeypatch.setattr(server, "DASHBOARD_API_URL", "http://test-dashboard:8081")
+
+            params = MoltbookUpdateIdentityInput(
+                prompt_text="B" * 100,
+                change_summary="Testing error handling",
+            )
+            result = await moltbook_update_identity(params, mock_ctx)
+            data = json.loads(result)
+
+            assert "error" in data
+            assert "500" in data["error"]
+        finally:
+            server._http_client = original_client
+            server._credentials = original_creds
+
+    @pytest.mark.asyncio
+    async def test_identity_update_timeout(self, mock_ctx, monkeypatch):
+        """Timeout should return friendly error message."""
+        import server
+        from server import moltbook_update_identity, MoltbookUpdateIdentityInput
+
+        original_client = server._http_client
+        original_creds = server._credentials
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
+
+        try:
+            server._http_client = mock_client
+            server._credentials = {"api_key": "test_key", "agent_name": "TestAgent"}
+            monkeypatch.setattr(server, "DASHBOARD_API_URL", "http://test-dashboard:8081")
+
+            params = MoltbookUpdateIdentityInput(
+                prompt_text="C" * 100,
+                change_summary="Testing timeout handling",
+            )
+            result = await moltbook_update_identity(params, mock_ctx)
+            data = json.loads(result)
+
+            assert "error" in data
+            assert "timed out" in data["error"].lower()
+        finally:
+            server._http_client = original_client
+            server._credentials = original_creds
+
+    def test_input_model_validation_short_prompt(self):
+        """Prompt text below min_length should be rejected."""
+        from server import MoltbookUpdateIdentityInput
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            MoltbookUpdateIdentityInput(
+                prompt_text="Too short",
+                change_summary="Valid summary",
+            )
+
+    def test_input_model_validation_short_summary(self):
+        """Change summary below min_length should be rejected."""
+        from server import MoltbookUpdateIdentityInput
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            MoltbookUpdateIdentityInput(
+                prompt_text="A" * 100,
+                change_summary="Hi",  # min_length=5
+            )
+
+    def test_input_model_extra_fields_forbidden(self):
+        """Extra fields should be rejected."""
+        from server import MoltbookUpdateIdentityInput
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            MoltbookUpdateIdentityInput(
+                prompt_text="A" * 100,
+                change_summary="Valid summary here",
+                extra_field="not allowed",
+            )

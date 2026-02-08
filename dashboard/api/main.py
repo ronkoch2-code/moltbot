@@ -7,11 +7,12 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from dashboard.api.database import init_db
 from dashboard.api.models import HealthOut
-from dashboard.api.routers import actions, runs, stats
+from dashboard.api.routers import actions, prompts, runs, stats
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -45,6 +46,7 @@ app.add_middleware(
 app.include_router(runs.router)
 app.include_router(actions.router)
 app.include_router(stats.router)
+app.include_router(prompts.router)
 
 
 @app.get("/api/health", response_model=HealthOut)
@@ -53,10 +55,21 @@ def health_check():
     return HealthOut(status="ok", database="ok")
 
 
-# Serve React static files — must be last so it doesn't shadow API routes
+# Serve React SPA — static assets + index.html fallback for client-side routing
 STATIC_DIR = Path(__file__).resolve().parent.parent / "webapp" / "dist"
 if STATIC_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+    # Mount static assets (JS/CSS bundles) at /assets
+    assets_dir = STATIC_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    # SPA catch-all: serve index.html for any non-API path (React Router handles routing)
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        file_path = STATIC_DIR / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(STATIC_DIR / "index.html")
 
 
 def main():

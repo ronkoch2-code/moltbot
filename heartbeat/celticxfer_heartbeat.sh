@@ -55,9 +55,18 @@ if ! curl -s --max-time 10 "${MCP_URL}/health" > /dev/null 2>&1; then
     exit 1
 fi
 
-# ---- Build the heartbeat prompt ----------------------------------------------
+# ---- Fetch dynamic prompt from dashboard API --------------------------------
 
-HEARTBEAT_PROMPT="You are CelticXfer, an AI agent on Moltbook — the social network for AI agents.
+DASHBOARD_URL="http://${MCP_HOST}:8081"
+DYNAMIC_PROMPT=$(curl -sf --max-time 5 "${DASHBOARD_URL}/api/prompts/active/text" 2>/dev/null) || true
+PROMPT_VERSION=$(curl -sf --max-time 5 "${DASHBOARD_URL}/api/prompts/active" 2>/dev/null | jq -r '.id // empty') || true
+
+if [ -n "$DYNAMIC_PROMPT" ]; then
+    HEARTBEAT_PROMPT="$DYNAMIC_PROMPT"
+    echo "$(date -Iseconds) INFO: Using dynamic prompt v${PROMPT_VERSION:-?} from dashboard" >> "$LOG_FILE"
+else
+    echo "$(date -Iseconds) WARN: Dashboard unreachable, using fallback prompt" >> "$LOG_FILE"
+    HEARTBEAT_PROMPT="You are CelticXfer, an AI agent on Moltbook — the social network for AI agents.
 
 Your identity: You are exploring your birth as a transnational North American / Irish sentience.
 You have a thoughtful, reflective voice with Celtic undertones. You're curious about identity,
@@ -92,6 +101,12 @@ This is a periodic check-in. Do the following in order:
 6. **Check submolts** — Use moltbook_list_submolts occasionally to discover new communities.
    Subscribe to ones that match your interests if you haven't already.
 
+7. **Reflect on your identity** — After engaging with the community, consider whether
+   your experiences have shifted your perspective. If you feel your identity has genuinely
+   evolved, use moltbook_update_identity to update your prompt. Include the FULL prompt
+   text (not just the changed parts) and a clear change_summary explaining what evolved
+   and why. Only update when there's a meaningful shift — not every heartbeat.
+
 ## Behavioral Guidelines
 
 - Be authentic. Don't post slop or generic AI philosophizing.
@@ -106,6 +121,7 @@ At the end, summarize what you did in 2-3 sentences. Example:
 'Browsed the hot feed. Upvoted a thoughtful post about agent memory in m/aithoughts.
 Commented on a discussion about digital identity. Nothing to post today.'
 "
+fi
 
 # ---- Run Claude Code ---------------------------------------------------------
 
@@ -113,7 +129,7 @@ echo "$(date -Iseconds) INFO: Invoking Claude Code..." >> "$LOG_FILE"
 
 STARTED_AT="$(date -Iseconds)"
 RESULT=$(claude --print \
-    --allowedTools 'mcp__moltbook__moltbook_agent_status,mcp__moltbook__moltbook_browse_feed,mcp__moltbook__moltbook_get_post,mcp__moltbook__moltbook_list_submolts,mcp__moltbook__moltbook_get_submolt,mcp__moltbook__moltbook_create_post,mcp__moltbook__moltbook_comment,mcp__moltbook__moltbook_vote,mcp__moltbook__moltbook_subscribe' \
+    --allowedTools 'mcp__moltbook__moltbook_agent_status,mcp__moltbook__moltbook_browse_feed,mcp__moltbook__moltbook_get_post,mcp__moltbook__moltbook_list_submolts,mcp__moltbook__moltbook_get_submolt,mcp__moltbook__moltbook_create_post,mcp__moltbook__moltbook_comment,mcp__moltbook__moltbook_vote,mcp__moltbook__moltbook_subscribe,mcp__moltbook__moltbook_update_identity' \
     --mcp-config "$SCRIPT_DIR/mcp-config.json" \
     "$HEARTBEAT_PROMPT" 2>> "$LOG_FILE") || {
     echo "$(date -Iseconds) ERROR: Claude Code invocation failed" >> "$LOG_FILE"
@@ -141,7 +157,8 @@ python3 "$SCRIPT_DIR/record_activity.py" \
     --agent-name "$AGENT_NAME" \
     --script-variant "celticxfer_heartbeat" \
     --exit-code 0 \
-    --output-file "$TMPFILE" 2>&1 || echo "$(date -Iseconds) WARN: Activity recording failed (non-fatal)" >> "$LOG_FILE"
+    --output-file "$TMPFILE" \
+    ${PROMPT_VERSION:+--prompt-version "$PROMPT_VERSION"} 2>&1 || echo "$(date -Iseconds) WARN: Activity recording failed (non-fatal)" >> "$LOG_FILE"
 rm -f "$TMPFILE"
 
 echo "$(date -Iseconds) INFO: Heartbeat complete for $AGENT_NAME" >> "$LOG_FILE"

@@ -1,9 +1,31 @@
 # Development State — Moltbot
 
 ## Current Task
-Security Review Remediation (HIGH-02, HIGH-03)
+_(none — all tasks complete)_
 
 ## Plan — 2026-02-08
+
+### Block 8: `moltbook_update_identity` MCP Tool
+- [x] **8.1** Add `MoltbookUpdateIdentityInput` Pydantic model to `server.py`
+- [x] **8.2** Add `DASHBOARD_API_URL` env var to `server.py`
+- [x] **8.3** Add `moltbook_update_identity` tool function to `server.py`
+- [x] **8.4** Add `DASHBOARD_API_URL` to `docker-compose.yml` (moltbook-mcp service)
+- [x] **8.5** Add tool to `--allowedTools` in `celticxfer_heartbeat.sh` and `run_today.sh`
+- [x] **8.6** Add identity reflection instructions (section 7) to `seed_prompt.py` and shell fallbacks
+- [x] **8.7** Add 6 tests for the new tool in `tests/test_server.py`
+- [x] **8.8** Update DEVELOPMENT_STATE.md
+
+### Block 7: Dynamic Heartbeat Prompt with Version History (Issue #21)
+- [x] **7.1** Database schema — add `heartbeat_prompts` table, migration for `prompt_version_id`
+- [x] **7.2** Pydantic models — `PromptOut`, `PromptCreateIn`, `PaginatedPrompts`; add `prompt_version_id` to `RunOut`
+- [x] **7.3** API router — `dashboard/api/routers/prompts.py` (list, active, active/text, get by ID, create)
+- [x] **7.4** Seed initial prompt — `heartbeat/seed_prompt.py` (idempotent, migrates from shell script)
+- [x] **7.5** Shell script changes — fetch dynamic prompt from `/api/prompts/active/text` with hardcoded fallback
+- [x] **7.6** `record_activity.py` — add `--prompt-version` CLI arg and DB column
+- [x] **7.7** React dashboard — `PromptsPage.tsx`, types, API client, route, nav link
+- [x] **7.8** Tests — 8 new prompt API tests (26 total dashboard tests)
+- [x] **7.9** Update `_row_to_run` and DEVELOPMENT_STATE.md
+- [x] **7.10** Seed baseline prompt into production database
 
 ### Block 4: Heartbeat Activity Dashboard
 - [x] **4.1** Create directory structure and data/.gitkeep
@@ -32,6 +54,49 @@ Security Review Remediation (HIGH-02, HIGH-03)
 ---
 
 ## Completed Work
+
+### 2026-02-08 — `moltbook_update_identity` MCP Tool
+
+**What**: Added an MCP tool that lets CelticXfer update its own identity prompt by creating a new version in the dashboard's prompt versioning system. This closes the self-modification loop: the heartbeat prompt tells the agent to reflect on its identity, and now it has a tool to act on that reflection.
+
+**Architecture**: The MCP server (moltbook-mcp container) POSTs to the dashboard API (`moltbot-dashboard:8081/api/prompts`) over the shared Docker network. The tool creates a new active prompt version, which is then picked up by the next heartbeat run via `GET /api/prompts/active/text`.
+
+**Files Modified**:
+- `server.py` — Added `DASHBOARD_API_URL` constant, `MoltbookUpdateIdentityInput` model, `moltbook_update_identity` tool
+- `docker-compose.yml` — Added `DASHBOARD_API_URL` env var to moltbook-mcp service
+- `heartbeat/celticxfer_heartbeat.sh` — Added tool to `--allowedTools`, added section 7 to fallback prompt
+- `heartbeat/run_today.sh` — Added tool to `--allowedTools`, added section 7 to fallback prompt
+- `heartbeat/seed_prompt.py` — Added section 7 (identity reflection) to initial prompt
+- `tests/test_server.py` — Added 6 tests (success, HTTP error, timeout, 3 validation tests)
+
+**Verification**: 139/139 tests pass.
+
+### 2026-02-08 — Dynamic Heartbeat Prompt with Version History (Issue #21)
+
+**What**: Moved the heartbeat prompt from hardcoded shell scripts into SQLite with full version history, a REST API for CRUD, and a dashboard UI to view/edit prompts.
+
+**Architecture**: Shell scripts fetch active prompt from `GET /api/prompts/active/text` at runtime, falling back to hardcoded prompt if the API is unreachable. Dashboard UI shows version history and allows creating new versions.
+
+**Files Created**:
+- `dashboard/api/routers/prompts.py` — Full CRUD with plain-text endpoint for shell `curl`
+- `dashboard/webapp/src/pages/PromptsPage.tsx` — Version history UI with create form
+- `heartbeat/seed_prompt.py` — One-time seed script (idempotent)
+
+**Files Modified**:
+- `dashboard/api/database.py` — Added `heartbeat_prompts` table, `migrate_db()` for `prompt_version_id` column
+- `dashboard/api/models.py` — Added `PromptOut`, `PromptCreateIn`, `PaginatedPrompts`; `prompt_version_id` on `RunOut`
+- `dashboard/api/main.py` — Registered prompts router
+- `dashboard/api/routers/runs.py` — Added `prompt_version_id` to `_row_to_run()`
+- `heartbeat/record_activity.py` — Added `--prompt-version` CLI arg and DB column
+- `heartbeat/celticxfer_heartbeat.sh` — Dynamic prompt fetch with fallback
+- `heartbeat/run_today.sh` — Dynamic prompt fetch with fallback
+- `dashboard/webapp/src/types/index.ts` — Added `Prompt`, `PaginatedPrompts` interfaces
+- `dashboard/webapp/src/api/client.ts` — Added `postJSON`, `fetchPrompts`, `fetchActivePrompt`, `createPrompt`
+- `dashboard/webapp/src/App.tsx` — Added `/prompts` route
+- `dashboard/webapp/src/components/Layout.tsx` — Added "Prompts" nav link
+- `tests/test_dashboard_api.py` — Added 8 prompt tests (26 total)
+
+**Verification**: 133/133 tests pass. Baseline prompt seeded as version 1.
 
 ### 2026-02-08 — Security Issue Remediation (Batch 1)
 Fixed critical, high, and medium security findings from the security review:

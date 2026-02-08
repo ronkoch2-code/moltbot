@@ -1,9 +1,21 @@
-import type { Stats, TimelinePoint, PaginatedRuns, RunDetail, PaginatedActions, RunFilters } from '@/types';
+import type { Stats, TimelinePoint, PaginatedRuns, RunDetail, PaginatedActions, RunFilters, PaginatedPrompts, Prompt } from '@/types';
 
 const API_BASE = '/api';
 
 async function fetchJSON<T>(url: string): Promise<T> {
   const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`API error: ${response.status} ${response.statusText}`);
+  }
+  return response.json();
+}
+
+async function postJSON<T>(url: string, body: unknown): Promise<T> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
   if (!response.ok) {
     throw new Error(`API error: ${response.status} ${response.statusText}`);
   }
@@ -58,4 +70,20 @@ export async function fetchActions(filters: {
   const url = queryString ? `${API_BASE}/actions?${queryString}` : `${API_BASE}/actions`;
 
   return fetchJSON<PaginatedActions>(url);
+}
+
+export async function fetchPrompts(page: number = 1, perPage: number = 20): Promise<PaginatedPrompts> {
+  return fetchJSON<PaginatedPrompts>(`${API_BASE}/prompts?page=${page}&per_page=${perPage}`);
+}
+
+export async function fetchActivePrompt(): Promise<Prompt> {
+  return fetchJSON<Prompt>(`${API_BASE}/prompts/active`);
+}
+
+export async function createPrompt(body: {
+  prompt_text: string;
+  change_summary?: string;
+  author?: string;
+}): Promise<Prompt> {
+  return postJSON<Prompt>(`${API_BASE}/prompts`, body);
 }

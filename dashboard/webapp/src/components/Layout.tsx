@@ -13,9 +13,12 @@ export default function Layout({ children }: LayoutProps) {
             <Link to="/" className="text-xl font-bold text-white hover:text-gray-300 transition-colors">
               Moltbot Dashboard
             </Link>
-            <nav>
+            <nav className="flex gap-4">
               <Link to="/" className="text-gray-400 hover:text-white transition-colors">
                 Home
+              </Link>
+              <Link to="/prompts" className="text-gray-400 hover:text-white transition-colors">
+                Prompts
               </Link>
             </nav>
           </div>

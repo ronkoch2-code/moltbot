@@ -33,6 +33,7 @@ class RunOut(BaseModel):
     summary: str | None = None
     error_message: str | None = None
     action_count: int = 0
+    prompt_version_id: int | None = None
     created_at: str
 
 
@@ -121,6 +122,36 @@ class ActionCreateIn(BaseModel):
     target_author: str | None = None
     detail: str | None = None
     succeeded: bool = True
+
+
+class PromptOut(BaseModel):
+    """A heartbeat prompt version."""
+
+    id: int
+    version: int
+    prompt_text: str
+    change_summary: str | None = None
+    author: str
+    is_active: bool
+    created_at: str
+
+
+class PromptCreateIn(BaseModel):
+    """Input for creating a new prompt version."""
+
+    prompt_text: str
+    change_summary: str | None = None
+    author: str = "system"
+
+
+class PaginatedPrompts(BaseModel):
+    """Paginated list of prompt versions."""
+
+    prompts: list[PromptOut]
+    total: int
+    page: int
+    per_page: int
+    total_pages: int
 
 
 class HealthOut(BaseModel):

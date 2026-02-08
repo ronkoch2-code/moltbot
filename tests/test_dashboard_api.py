@@ -248,3 +248,96 @@ class TestStats:
         # All runs are on the same day
         if data:
             assert data[0]["runs"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Prompts endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestPrompts:
+    def test_list_prompts_empty(self, client):
+        resp = client.get("/api/prompts")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["prompts"] == []
+        assert data["total"] == 0
+
+    def test_create_prompt(self, client):
+        resp = client.post("/api/prompts", json={
+            "prompt_text": "You are CelticXfer.",
+            "change_summary": "Initial prompt",
+            "author": "system",
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["version"] == 1
+        assert data["is_active"] is True
+        assert data["prompt_text"] == "You are CelticXfer."
+        assert data["author"] == "system"
+
+    def test_create_second_prompt_deactivates_first(self, client):
+        client.post("/api/prompts", json={
+            "prompt_text": "Version 1",
+            "author": "system",
+        })
+        resp2 = client.post("/api/prompts", json={
+            "prompt_text": "Version 2",
+            "change_summary": "Updated personality",
+            "author": "ron",
+        })
+        assert resp2.status_code == 201
+        data2 = resp2.json()
+        assert data2["version"] == 2
+        assert data2["is_active"] is True
+
+        # Check first is no longer active
+        listing = client.get("/api/prompts").json()
+        versions = {p["version"]: p["is_active"] for p in listing["prompts"]}
+        assert versions[1] is False
+        assert versions[2] is True
+
+    def test_get_active_prompt(self, client):
+        client.post("/api/prompts", json={
+            "prompt_text": "Active prompt text",
+            "author": "system",
+        })
+        resp = client.get("/api/prompts/active")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["prompt_text"] == "Active prompt text"
+        assert data["is_active"] is True
+
+    def test_get_active_prompt_text(self, client):
+        client.post("/api/prompts", json={
+            "prompt_text": "Plain text prompt",
+            "author": "system",
+        })
+        resp = client.get("/api/prompts/active/text")
+        assert resp.status_code == 200
+        assert resp.text == "Plain text prompt"
+        assert "text/plain" in resp.headers["content-type"]
+
+    def test_get_active_prompt_none(self, client):
+        resp = client.get("/api/prompts/active")
+        assert resp.status_code == 404
+
+    def test_get_prompt_by_id(self, client):
+        create_resp = client.post("/api/prompts", json={
+            "prompt_text": "Specific prompt",
+            "author": "system",
+        })
+        prompt_id = create_resp.json()["id"]
+        resp = client.get(f"/api/prompts/{prompt_id}")
+        assert resp.status_code == 200
+        assert resp.json()["prompt_text"] == "Specific prompt"
+
+    def test_prompt_version_auto_increments(self, client):
+        for i in range(3):
+            client.post("/api/prompts", json={
+                "prompt_text": f"Prompt v{i + 1}",
+                "author": "system",
+            })
+        listing = client.get("/api/prompts").json()
+        versions = sorted(p["version"] for p in listing["prompts"])
+        assert versions == [1, 2, 3]

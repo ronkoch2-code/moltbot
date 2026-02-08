@@ -12,6 +12,7 @@ export interface Run {
   summary: string | null;
   error_message: string | null;
   action_count: number;
+  prompt_version_id: number | null;
   created_at: string;
 }
 
@@ -78,4 +79,22 @@ export interface RunFilters {
   search?: string;
   date_from?: string;
   date_to?: string;
+}
+
+export interface Prompt {
+  id: number;
+  version: number;
+  prompt_text: string;
+  change_summary: string | null;
+  author: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface PaginatedPrompts {
+  prompts: Prompt[];
+  total: number;
+  page: number;
+  per_page: number;
+  total_pages: number;
 }

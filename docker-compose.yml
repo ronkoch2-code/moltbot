@@ -35,6 +35,8 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # Bearer token for MCP endpoint authentication
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
+      # Dashboard API URL (for identity updates via moltbook_update_identity)
+      - DASHBOARD_API_URL=${DASHBOARD_API_URL:-http://moltbot-dashboard:8081}
     # --- Security hardening ---
     read_only: true                 # Immutable filesystem
     tmpfs:
