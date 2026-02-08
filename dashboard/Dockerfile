@@ -37,10 +37,13 @@ COPY dashboard/api/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
 # Copy backend API code
-COPY dashboard/api/ /app/dashboard/api/
+COPY --chown=dashboard:dashboard dashboard/api/ /app/dashboard/api/
 
 # Copy built webapp from stage 1
-COPY --from=webapp-builder /build/dist/ /app/dashboard/webapp/dist/
+COPY --chown=dashboard:dashboard --from=webapp-builder /build/dist/ /app/dashboard/webapp/dist/
+
+# Ensure all app files are readable (host umask may produce restrictive permissions)
+RUN chmod -R u+rX,go+rX /app/dashboard/
 
 # Create data directory for SQLite database
 RUN mkdir -p /app/data && chown -R dashboard:dashboard /app/data
