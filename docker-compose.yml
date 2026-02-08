@@ -53,7 +53,7 @@ services:
       context: .
       dockerfile: dashboard/Dockerfile
     container_name: moltbot-dashboard
-    restart: unless-stopped
+    restart: on-failure:5
     # Run as host user so bind mount permissions match
     user: "${UID:-1000}:${GID:-1000}"
     ports:
