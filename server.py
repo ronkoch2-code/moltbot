@@ -12,6 +12,7 @@ import json
 import os
 import logging
 import re
+import time
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from enum import Enum
@@ -252,6 +253,63 @@ def _strip_security_metadata(data: Any) -> Any:
     return data
 
 
+# ---------------------------------------------------------------------------
+# Rate Limiter
+# ---------------------------------------------------------------------------
+
+
+class RateLimiter:
+    """Simple in-memory rate limiter using sliding window."""
+
+    def __init__(self, limits: Dict[str, tuple[int, float]]):
+        """Initialize the rate limiter.
+
+        Args:
+            limits: Dict mapping action names to (max_calls, window_seconds) tuples.
+                   Example: {"post": (5, 3600)} allows 5 posts per hour.
+        """
+        self.limits = limits
+        self.call_history: Dict[str, List[float]] = {action: [] for action in limits.keys()}
+
+    def check(self, action: str) -> None:
+        """Check if an action is allowed under rate limits.
+
+        Args:
+            action: The action type to check (e.g., "post", "comment", "vote").
+
+        Raises:
+            ValueError: If the rate limit for this action has been exceeded.
+        """
+        if action not in self.limits:
+            return
+
+        max_calls, window_seconds = self.limits[action]
+        now = time.monotonic()
+        cutoff = now - window_seconds
+
+        # Remove expired timestamps
+        self.call_history[action] = [ts for ts in self.call_history[action] if ts > cutoff]
+
+        # Check if limit exceeded
+        if len(self.call_history[action]) >= max_calls:
+            window_hours = window_seconds / 3600
+            raise ValueError(
+                f"Rate limit exceeded: maximum {max_calls} {action}s per "
+                f"{window_hours:.0f} hour{'s' if window_hours != 1 else ''}. Try again later."
+            )
+
+        # Record this call
+        self.call_history[action].append(now)
+
+
+# Create module-level rate limiter instance
+_rate_limiter = RateLimiter({
+    "post": (5, 3600),      # 5 posts per hour
+    "comment": (20, 3600),  # 20 comments per hour
+    "vote": (60, 3600),     # 60 votes per hour
+})
+
+
 # ===================================================================
 # Input Models
 # ===================================================================
@@ -319,8 +377,8 @@ class MoltbookCreatePostInput(BaseModel):
     @field_validator("url")
     @classmethod
     def validate_url(cls, v: Optional[str]) -> Optional[str]:
-        if v and not v.startswith(("http://", "https://")):
-            raise ValueError("URL must start with http:// or https://")
+        if v and not v.startswith("https://"):
+            raise ValueError("URL must start with https://")
         return v
 
 
@@ -587,6 +645,11 @@ async def moltbook_create_post(params: MoltbookCreatePostInput, ctx: Context) ->
     Returns:
         str: JSON with the created post object.
     """
+    try:
+        _rate_limiter.check("post")
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
     client = _get_client(ctx)
     api_key = _get_api_key(ctx)
 
@@ -620,6 +683,11 @@ async def moltbook_comment(params: MoltbookCommentInput, ctx: Context) -> str:
     Returns:
         str: JSON with the created comment object.
     """
+    try:
+        _rate_limiter.check("comment")
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
     client = _get_client(ctx)
     api_key = _get_api_key(ctx)
 
@@ -652,6 +720,11 @@ async def moltbook_vote(params: MoltbookVoteInput, ctx: Context) -> str:
     Returns:
         str: JSON confirmation with updated vote count.
     """
+    try:
+        _rate_limiter.check("vote")
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
     client = _get_client(ctx)
     api_key = _get_api_key(ctx)
 

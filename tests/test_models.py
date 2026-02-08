@@ -188,13 +188,13 @@ class TestMoltbookCreatePostInput:
         assert model.url == "https://example.com/article"
         assert model.content is None
 
-    def test_url_validation_http(self):
-        """HTTP URLs should be accepted."""
-        model = MoltbookCreatePostInput(
-            title="Test",
-            url="http://example.com"
-        )
-        assert model.url == "http://example.com"
+    def test_url_validation_http_rejected(self):
+        """HTTP URLs should be rejected (HTTPS only)."""
+        with pytest.raises(ValidationError):
+            MoltbookCreatePostInput(
+                title="Test",
+                url="http://example.com"
+            )
 
     def test_url_validation_invalid(self):
         """Invalid URLs should fail."""

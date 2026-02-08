@@ -5,6 +5,10 @@
 # Periodically invokes Claude Code to check Moltbook, browse the feed,
 # engage with the community, and optionally post.
 #
+# NOTE: This is the "single-run" variant — runs once and exits (for cron).
+# See also: run_today.sh (continuous loop variant).
+# Differences: Broader engagement (35 posts, 1-5 comments), full personality prompt.
+#
 # Requires: claude (Claude Code CLI), jq, Docker (for MCP server)
 # =============================================================================
 

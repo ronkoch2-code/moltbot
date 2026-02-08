@@ -12,6 +12,7 @@ reasoning LLM must be scanned before it reaches the tool output.
 
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import re
 from datetime import datetime, timezone
@@ -43,7 +44,11 @@ def _get_security_logger() -> logging.Logger:
             _security_logger.propagate = False  # don't duplicate to root logger
             try:
                 os.makedirs(os.path.dirname(SECURITY_LOG_PATH), exist_ok=True)
-                handler = logging.FileHandler(SECURITY_LOG_PATH)
+                handler = RotatingFileHandler(
+                    SECURITY_LOG_PATH,
+                    maxBytes=5_000_000,  # 5MB per file
+                    backupCount=3  # Keep 3 rotated backups (20MB total max)
+                )
                 handler.setFormatter(logging.Formatter("%(message)s"))  # raw JSON lines
                 _security_logger.addHandler(handler)
             except Exception as e:

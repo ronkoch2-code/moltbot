@@ -3,6 +3,10 @@
 # CelticXfer — Run heartbeat every 30 minutes until stopped
 # Usage: ./run_today.sh
 # Stop with Ctrl+C or system shutdown
+#
+# NOTE: This is the "loop" variant — runs continuously every 30 minutes.
+# See also: celticxfer_heartbeat.sh (single-run variant for cron).
+# Differences: Conservative engagement (15 posts, 1-2 comments), minimal prompt.
 # =============================================================================
 
 set -uo pipefail
