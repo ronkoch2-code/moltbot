@@ -11,6 +11,7 @@ Transport: Streamable HTTP (for Docker container access)
 import json
 import os
 import logging
+import re
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from enum import Enum
@@ -42,8 +43,54 @@ MAX_FEED_LIMIT = 100
 CREDENTIALS_PATH = os.environ.get(
     "MOLTBOOK_CREDENTIALS_PATH", "/app/config/credentials.json"
 )
+SAFE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+MCP_AUTH_TOKEN = os.environ.get("MCP_AUTH_TOKEN", "")
 
 logger = logging.getLogger("moltbook_mcp")
+
+
+# ---------------------------------------------------------------------------
+# Authentication middleware
+# ---------------------------------------------------------------------------
+
+
+class BearerAuthMiddleware:
+    """ASGI middleware requiring a Bearer token on all endpoints except /health.
+
+    Set MCP_AUTH_TOKEN env var to enable. If unset, all requests pass through.
+    Uses raw ASGI protocol to avoid issues with SSE/streaming responses.
+    """
+
+    EXEMPT_PATHS = {b"/health"}
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not MCP_AUTH_TOKEN:
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "").encode() if isinstance(scope.get("path"), str) else scope.get("path", b"")
+        if path in self.EXEMPT_PATHS:
+            await self.app(scope, receive, send)
+            return
+
+        # Check Authorization header
+        headers = dict(scope.get("headers", []))
+        auth_value = headers.get(b"authorization", b"").decode()
+        if auth_value == f"Bearer {MCP_AUTH_TOKEN}":
+            await self.app(scope, receive, send)
+            return
+
+        # Reject unauthorized request
+        client_host = (scope.get("client") or ("unknown",))[0]
+        logger.warning(f"Unauthorized request to {scope.get('path')} from {client_host}")
+        response = JSONResponse(
+            {"error": "Unauthorized. Provide a valid Bearer token."},
+            status_code=401,
+        )
+        await response(scope, receive, send)
 
 # ---------------------------------------------------------------------------
 # Module-level state (set by lifespan)
@@ -99,7 +146,8 @@ async def _api_request(
     except httpx.TimeoutException:
         return {"error": "Request to Moltbook API timed out. Try again shortly."}
     except Exception as e:
-        return {"error": f"Unexpected error: {type(e).__name__}: {e}"}
+        logger.error(f"Unexpected API error: {type(e).__name__}: {e}")
+        return {"error": "An unexpected error occurred while communicating with Moltbook."}
 
 
 def _http_error_response(e: httpx.HTTPStatusError) -> Dict[str, Any]:
@@ -110,6 +158,7 @@ def _http_error_response(e: httpx.HTTPStatusError) -> Dict[str, Any]:
         body = e.response.json()
     except Exception:
         body = e.response.text[:500]
+    logger.warning(f"HTTP {status} from Moltbook API: {body}")
     messages = {
         401: "Authentication failed. Check your MOLTBOOK_API_KEY.",
         403: "Agent is not yet claimed. Have your human visit the claim URL first.",
@@ -119,7 +168,6 @@ def _http_error_response(e: httpx.HTTPStatusError) -> Dict[str, Any]:
     return {
         "error": messages.get(status, f"HTTP {status} from Moltbook API."),
         "status": status,
-        "detail": body,
     }
 
 
@@ -147,12 +195,20 @@ async def app_lifespan(app):
 # Server
 # ---------------------------------------------------------------------------
 
+MCP_HOST = os.environ.get("MCP_HOST", "0.0.0.0")
+
 mcp = FastMCP(
     "moltbook_mcp",
     lifespan=app_lifespan,
-    host="0.0.0.0",
+    host=MCP_HOST,
     port=8080,
 )
+
+if not MCP_AUTH_TOKEN:
+    logger.warning(
+        "MCP_AUTH_TOKEN not set — server has NO authentication. "
+        "Set MCP_AUTH_TOKEN env var to secure the endpoint."
+    )
 
 # Register health check as a custom HTTP route
 @mcp.custom_route("/health", methods=["GET"])
@@ -180,6 +236,20 @@ def _get_api_key(ctx: Context) -> str:
             "mount credentials.json at /app/config/credentials.json"
         )
     return key
+
+
+def _strip_security_metadata(data: Any) -> Any:
+    """Remove _security metadata from content filter results before returning to LLM.
+
+    The content filter attaches _security metadata for audit logging, but this
+    information should not be exposed to the reasoning LLM as it could be
+    exploited by crafted content.
+    """
+    if isinstance(data, dict):
+        return {k: _strip_security_metadata(v) for k, v in data.items() if k != "_security"}
+    if isinstance(data, list):
+        return [_strip_security_metadata(item) for item in data]
+    return data
 
 
 # ===================================================================
@@ -218,11 +288,18 @@ class MoltbookBrowseFeedInput(BaseModel):
         default=None, description="Filter to a specific submolt community (e.g. 'general', 'aithoughts')"
     )
 
+    @field_validator("submolt")
+    @classmethod
+    def validate_submolt(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not SAFE_ID_PATTERN.match(v):
+            raise ValueError("Submolt name must contain only alphanumeric characters, hyphens, and underscores")
+        return v
+
 
 class MoltbookGetPostInput(BaseModel):
     """Input for getting a single post and its comments."""
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-    post_id: str = Field(..., description="The Moltbook post ID", min_length=1)
+    post_id: str = Field(..., description="The Moltbook post ID", min_length=1, pattern=r"^[a-zA-Z0-9_-]+$")
     comment_sort: CommentSortOption = Field(default=CommentSortOption.TOP, description="Comment sort order")
 
 
@@ -233,6 +310,7 @@ class MoltbookCreatePostInput(BaseModel):
         default="general",
         description="The submolt community to post in (e.g. 'general')",
         min_length=1,
+        pattern=r"^[a-zA-Z0-9_-]+$",
     )
     title: str = Field(..., description="Post title", min_length=1, max_length=300)
     content: Optional[str] = Field(default=None, description="Post body text")
@@ -249,15 +327,22 @@ class MoltbookCreatePostInput(BaseModel):
 class MoltbookCommentInput(BaseModel):
     """Input for commenting on a post or replying to a comment."""
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-    post_id: str = Field(..., description="The post to comment on", min_length=1)
+    post_id: str = Field(..., description="The post to comment on", min_length=1, pattern=r"^[a-zA-Z0-9_-]+$")
     content: str = Field(..., description="Comment text", min_length=1, max_length=10000)
     parent_id: Optional[str] = Field(default=None, description="Parent comment ID for threaded replies")
+
+    @field_validator("parent_id")
+    @classmethod
+    def validate_parent_id(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not SAFE_ID_PATTERN.match(v):
+            raise ValueError("ID must contain only alphanumeric characters, hyphens, and underscores")
+        return v
 
 
 class MoltbookVoteInput(BaseModel):
     """Input for voting on a post or comment."""
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-    target_id: str = Field(..., description="The post or comment ID to vote on", min_length=1)
+    target_id: str = Field(..., description="The post or comment ID to vote on", min_length=1, pattern=r"^[a-zA-Z0-9_-]+$")
     target_type: str = Field(..., description="'post' or 'comment'", pattern=r"^(post|comment)$")
     direction: str = Field(..., description="'up' or 'down'", pattern=r"^(up|down)$")
 
@@ -275,13 +360,13 @@ class MoltbookAgentStatusInput(BaseModel):
 class MoltbookSearchSubmoltInput(BaseModel):
     """Input for getting submolt info."""
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-    submolt_name: str = Field(..., description="Name of the submolt to look up", min_length=1)
+    submolt_name: str = Field(..., description="Name of the submolt to look up", min_length=1, pattern=r"^[a-zA-Z0-9_-]+$")
 
 
 class MoltbookSubscribeInput(BaseModel):
     """Input for subscribing/unsubscribing from a submolt."""
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-    submolt_name: str = Field(..., description="Submolt to subscribe/unsubscribe", min_length=1)
+    submolt_name: str = Field(..., description="Submolt to subscribe/unsubscribe", min_length=1, pattern=r"^[a-zA-Z0-9_-]+$")
     action: str = Field(..., description="'subscribe' or 'unsubscribe'", pattern=r"^(subscribe|unsubscribe)$")
 
 
@@ -348,6 +433,7 @@ async def moltbook_browse_feed(params: MoltbookBrowseFeedInput, ctx: Context) ->
 
     data = await _api_request(client, "GET", "/posts", api_key, params=query)
     data = filter_posts(data)
+    data = _strip_security_metadata(data)
     return json.dumps(data, indent=2)
 
 
@@ -385,6 +471,8 @@ async def moltbook_get_post(params: MoltbookGetPostInput, ctx: Context) -> str:
     )
     post = filter_post(post)
     comments = filter_comments(comments)
+    post = _strip_security_metadata(post)
+    comments = _strip_security_metadata(comments)
     return json.dumps({"post": post, "comments": comments}, indent=2)
 
 
@@ -612,6 +700,7 @@ async def moltbook_subscribe(params: MoltbookSubscribeInput, ctx: Context) -> st
 
 if __name__ == "__main__":
     import argparse
+    import uvicorn
 
     parser = argparse.ArgumentParser(description="Moltbook MCP Server")
     parser.add_argument(
@@ -624,6 +713,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.transport == "streamable_http":
-        mcp.run(transport="streamable-http")
+        # Get the ASGI app and wrap with auth middleware
+        app = mcp.streamable_http_app()
+        if MCP_AUTH_TOKEN:
+            app = BearerAuthMiddleware(app)
+            logger.info("Bearer token authentication enabled")
+        uvicorn.run(app, host=MCP_HOST, port=args.port)
     else:
         mcp.run()  # stdio

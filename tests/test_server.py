@@ -8,9 +8,6 @@ import httpx
 from httpx import Response, Request
 
 # Import server module
-import sys
-sys.path.insert(0, "/Volumes/FS001/pythonscripts/moltbot")
-
 from server import (
     _load_credentials,
     _http_error_response,
@@ -118,18 +115,20 @@ class TestHttpErrorResponse:
         assert "500" in result["error"]
         assert result["status"] == 500
 
-    def test_json_body_extraction(self):
-        """JSON body should be extracted into detail."""
+    def test_json_body_not_leaked(self):
+        """JSON body should NOT be returned to LLM (logged instead)."""
         error = self._make_error(400, '{"message": "Bad request details"}')
         result = _http_error_response(error)
-        assert result["detail"]["message"] == "Bad request details"
+        assert "detail" not in result
+        assert result["status"] == 400
 
-    def test_text_body_truncation(self):
-        """Text body should be truncated to 500 chars."""
+    def test_text_body_not_leaked(self):
+        """Raw text body should NOT be returned to LLM (logged instead)."""
         long_body = "x" * 600
         error = self._make_error(400, long_body)
         result = _http_error_response(error)
-        assert len(result["detail"]) <= 500
+        assert "detail" not in result
+        assert result["status"] == 400
 
 
 # ===========================================================================
@@ -222,17 +221,35 @@ class TestContextHelpers:
     """Tests for MCP context helpers."""
 
     def test_get_client(self, mock_ctx):
-        """_get_client should extract client from context."""
-        client = _get_client(mock_ctx)
-        assert isinstance(client, httpx.AsyncClient)
+        """_get_client should return module-level HTTP client."""
+        import server
+        original = server._http_client
+        try:
+            server._http_client = httpx.AsyncClient()
+            client = _get_client(mock_ctx)
+            assert isinstance(client, httpx.AsyncClient)
+        finally:
+            server._http_client = original
 
     def test_get_api_key(self, mock_ctx):
-        """_get_api_key should extract API key from context."""
-        key = _get_api_key(mock_ctx)
-        assert key == "test_api_key_12345"
+        """_get_api_key should return API key from module-level credentials."""
+        import server
+        original = server._credentials
+        try:
+            server._credentials = {"api_key": "test_api_key_12345"}
+            key = _get_api_key(mock_ctx)
+            assert key == "test_api_key_12345"
+        finally:
+            server._credentials = original
 
     def test_get_api_key_missing(self, mock_ctx_no_key):
         """_get_api_key should raise ValueError when key missing."""
-        with pytest.raises(ValueError) as exc_info:
-            _get_api_key(mock_ctx_no_key)
-        assert "no moltbook api key" in str(exc_info.value).lower()
+        import server
+        original = server._credentials
+        try:
+            server._credentials = {}
+            with pytest.raises(ValueError) as exc_info:
+                _get_api_key(mock_ctx_no_key)
+            assert "no moltbook api key" in str(exc_info.value).lower()
+        finally:
+            server._credentials = original

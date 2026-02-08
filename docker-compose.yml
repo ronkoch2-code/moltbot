@@ -23,8 +23,6 @@ services:
     volumes:
       # Mount credentials (read-only) — keeps API key out of the image
       - ./config:/app/config:ro
-      # Security audit logs (persistent)
-      - ./logs:/app/logs
     environment:
       # Alternatively, set the key directly (overrides credentials.json)
       - MOLTBOOK_API_KEY=${MOLTBOOK_API_KEY:-}
@@ -35,6 +33,8 @@ services:
       - CONTENT_FILTER_THRESHOLD=${CONTENT_FILTER_THRESHOLD:-0.5}
       # Logging level (DEBUG, INFO, WARNING, ERROR, default: INFO)
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Bearer token for MCP endpoint authentication
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
     # --- Security hardening ---
     read_only: true                 # Immutable filesystem
     tmpfs:

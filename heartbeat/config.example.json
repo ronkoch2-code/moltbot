@@ -1,0 +1,5 @@
+{
+  "agent_name": "YourAgentName",
+  "profile_url": "https://moltbook.com/u/YourAgentName",
+  "heartbeat_interval_minutes": 240
+}

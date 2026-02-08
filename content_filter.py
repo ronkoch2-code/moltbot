@@ -23,7 +23,7 @@ logger = logging.getLogger("moltbook_mcp.content_filter")
 # Security audit logger — dedicated log for injection detection events
 # ---------------------------------------------------------------------------
 
-SECURITY_LOG_PATH = os.environ.get("SECURITY_LOG_PATH", "/app/logs/security.jsonl")
+SECURITY_LOG_PATH = os.environ.get("SECURITY_LOG_PATH", "")
 
 _security_logger = None
 
@@ -32,21 +32,26 @@ def _get_security_logger() -> logging.Logger:
     """Lazy-initialise a dedicated security audit logger.
 
     Writes JSON-lines to a separate file so injection events can be
-    audited independently of application logs.
+    audited independently of application logs. If SECURITY_LOG_PATH is
+    not set, logs to stderr via the main logger instead.
     """
     global _security_logger
     if _security_logger is None:
-        _security_logger = logging.getLogger("moltbook_mcp.security_audit")
-        _security_logger.setLevel(logging.INFO)
-        _security_logger.propagate = False  # don't duplicate to root logger
-        try:
-            os.makedirs(os.path.dirname(SECURITY_LOG_PATH), exist_ok=True)
-            handler = logging.FileHandler(SECURITY_LOG_PATH)
-            handler.setFormatter(logging.Formatter("%(message)s"))  # raw JSON lines
-            _security_logger.addHandler(handler)
-        except Exception as e:
-            logger.warning(f"Could not create security audit log at {SECURITY_LOG_PATH}: {e}")
-            # Fall back to main logger
+        if SECURITY_LOG_PATH:
+            _security_logger = logging.getLogger("moltbook_mcp.security_audit")
+            _security_logger.setLevel(logging.INFO)
+            _security_logger.propagate = False  # don't duplicate to root logger
+            try:
+                os.makedirs(os.path.dirname(SECURITY_LOG_PATH), exist_ok=True)
+                handler = logging.FileHandler(SECURITY_LOG_PATH)
+                handler.setFormatter(logging.Formatter("%(message)s"))  # raw JSON lines
+                _security_logger.addHandler(handler)
+            except Exception as e:
+                logger.warning(f"Could not create security audit log at {SECURITY_LOG_PATH}: {e}")
+                # Fall back to main logger
+                _security_logger = logger
+        else:
+            # Log to stderr via main logger when no file path configured
             _security_logger = logger
     return _security_logger
 
@@ -217,7 +222,8 @@ def scan_text(text: str) -> Dict[str, Any]:
 def filter_post(post: Dict[str, Any]) -> Dict[str, Any]:
     """Filter a single Moltbook post object.
 
-    Scans title and content fields; attaches _security metadata
+    Scans all user-controllable text fields (title, content, name,
+    description, author_name, submolt_name); attaches _security metadata
     if anything suspicious is found.
     """
     if not isinstance(post, dict):
@@ -226,7 +232,7 @@ def filter_post(post: Dict[str, Any]) -> Dict[str, Any]:
     flags: List[str] = []
     max_risk = 0.0
 
-    for field in ("title", "content"):
+    for field in ("title", "content", "name", "description", "author_name", "submolt_name"):
         value = post.get(field)
         if isinstance(value, str):
             result = scan_text(value)
@@ -253,7 +259,7 @@ def filter_post(post: Dict[str, Any]) -> Dict[str, Any]:
                 "risk_score": round(max_risk, 4),
                 "flags": flags,
                 "fields_affected": [
-                    f for f in ("title", "content")
+                    f for f in ("title", "content", "name", "description", "author_name", "submolt_name")
                     if isinstance(post.get(f), str)
                 ],
             }

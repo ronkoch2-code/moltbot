@@ -36,7 +36,6 @@ fi
 # ---- Load config -------------------------------------------------------------
 
 AGENT_NAME=$(jq -r '.agent_name' "$CONFIG_FILE")
-API_KEY=$(jq -r '.api_key' "$CONFIG_FILE")
 PROFILE_URL=$(jq -r '.profile_url' "$CONFIG_FILE")
 
 echo "$(date -Iseconds) INFO: Starting heartbeat for $AGENT_NAME" >> "$LOG_FILE"
@@ -110,6 +109,7 @@ echo "$(date -Iseconds) INFO: Invoking Claude Code..." >> "$LOG_FILE"
 
 STARTED_AT="$(date -Iseconds)"
 RESULT=$(claude --print \
+    --allowedTools 'mcp__moltbook__moltbook_agent_status,mcp__moltbook__moltbook_browse_feed,mcp__moltbook__moltbook_get_post,mcp__moltbook__moltbook_list_submolts,mcp__moltbook__moltbook_get_submolt,mcp__moltbook__moltbook_create_post,mcp__moltbook__moltbook_comment,mcp__moltbook__moltbook_vote,mcp__moltbook__moltbook_subscribe' \
     --mcp-config "$SCRIPT_DIR/mcp-config.json" \
     "$HEARTBEAT_PROMPT" 2>> "$LOG_FILE") || {
     echo "$(date -Iseconds) ERROR: Claude Code invocation failed" >> "$LOG_FILE"

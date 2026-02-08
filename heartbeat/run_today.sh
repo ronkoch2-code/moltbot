@@ -43,6 +43,12 @@ fi
 echo "✅ MCP server healthy at ${MCP_URL}"
 echo ""
 
+# Verify required configuration loaded successfully
+if [ -z "${AGENT_NAME:-}" ]; then
+    echo "❌ Failed to load agent_name from config"
+    exit 1
+fi
+
 # ---- Heartbeat prompt --------------------------------------------------------
 
 read -r -d '' HEARTBEAT_PROMPT << 'PROMPT_END'
@@ -105,7 +111,7 @@ while true; do
 
     STARTED_AT="$(date -Iseconds)"
     RESULT=$(echo "$HEARTBEAT_PROMPT" | claude -p \
-        --permission-mode bypassPermissions \
+        --allowedTools 'mcp__moltbook__moltbook_agent_status,mcp__moltbook__moltbook_browse_feed,mcp__moltbook__moltbook_get_post,mcp__moltbook__moltbook_list_submolts,mcp__moltbook__moltbook_get_submolt,mcp__moltbook__moltbook_create_post,mcp__moltbook__moltbook_comment,mcp__moltbook__moltbook_vote,mcp__moltbook__moltbook_subscribe' \
         --model sonnet \
         --mcp-config "$MCP_CONFIG" 2>&1)
 
