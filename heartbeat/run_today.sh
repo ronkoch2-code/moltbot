@@ -1,8 +1,8 @@
 #!/bin/bash
 # =============================================================================
-# CelticXfer — Run heartbeat 10 times, every 30 minutes, with verbose output
+# CelticXfer — Run heartbeat every 30 minutes until stopped
 # Usage: ./run_today.sh
-# Stop anytime with Ctrl+C
+# Stop with Ctrl+C or system shutdown
 # =============================================================================
 
 set -uo pipefail
@@ -15,16 +15,18 @@ STATE_FILE="$SCRIPT_DIR/heartbeat-state.json"
 
 MCP_CONFIG='{"mcpServers":{"moltbook":{"command":"python3","args":["'"$PROJECT_DIR"'/stdio_bridge.py"]}}}'
 
-TOTAL_RUNS=10
 INTERVAL_SECONDS=1800  # 30 minutes
 
 AGENT_NAME=$(jq -r '.agent_name' "$CONFIG_FILE")
 PROFILE_URL=$(jq -r '.profile_url' "$CONFIG_FILE")
 
+trap 'echo ""; echo "🛑 Heartbeat stopped. Total runs: $RUN_COUNT"; exit 0' INT TERM
+
+RUN_COUNT=0
+
 echo "============================================"
 echo " CelticXfer Heartbeat — $(date)"
-echo " $TOTAL_RUNS runs, 30 minutes apart"
-echo " Ctrl+C to stop"
+echo " Running every 30 minutes (Ctrl+C to stop)"
 echo "============================================"
 echo ""
 
@@ -94,9 +96,10 @@ PROMPT_END
 
 # ---- Run loop ----------------------------------------------------------------
 
-for ((i=1; i<=TOTAL_RUNS; i++)); do
+while true; do
+    RUN_COUNT=$((RUN_COUNT + 1))
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "▶ Heartbeat $i/$TOTAL_RUNS — $(date)"
+    echo "▶ Heartbeat #${RUN_COUNT} — $(date)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 
@@ -111,29 +114,23 @@ for ((i=1; i<=TOTAL_RUNS; i++)); do
     echo ""
 
     if [ $EXIT_CODE -eq 0 ]; then
-        echo "✅ Heartbeat $i complete"
+        echo "✅ Heartbeat #${RUN_COUNT} complete"
     else
-        echo "⚠️  Heartbeat $i exited with code $EXIT_CODE"
+        echo "⚠️  Heartbeat #${RUN_COUNT} exited with code $EXIT_CODE"
     fi
 
     # Log and update state
-    echo "$(date -Iseconds) HEARTBEAT $i: $RESULT" >> "$LOG_FILE"
+    echo "$(date -Iseconds) HEARTBEAT $RUN_COUNT: $RESULT" >> "$LOG_FILE"
     jq -n \
         --arg ts "$(date -Iseconds)" \
-        --arg run "$i" \
+        --arg run "$RUN_COUNT" \
         --arg result "$RESULT" \
         '{last_heartbeat: $ts, run_number: $run, last_result: $result}' > "$STATE_FILE"
 
     echo ""
 
-    if [ $i -lt $TOTAL_RUNS ]; then
-        NEXT_TIME=$(date -v+30M "+%H:%M" 2>/dev/null || date -d "+30 minutes" "+%H:%M" 2>/dev/null || echo "~30 min")
-        echo "💤 Next heartbeat at ~${NEXT_TIME}. Ctrl+C to stop."
-        echo ""
-        sleep $INTERVAL_SECONDS
-    fi
+    NEXT_TIME=$(date -v+30M "+%H:%M" 2>/dev/null || date -d "+30 minutes" "+%H:%M" 2>/dev/null || echo "~30 min")
+    echo "💤 Next heartbeat at ~${NEXT_TIME}. Ctrl+C to stop."
+    echo ""
+    sleep $INTERVAL_SECONDS
 done
-
-echo "============================================"
-echo " All $TOTAL_RUNS heartbeats complete — $(date)"
-echo "============================================"
