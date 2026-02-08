@@ -28,19 +28,32 @@ docker compose down
 echo "=== Rebuilding ==="
 docker compose up --build -d
 
-echo "=== Waiting for container to start ==="
+echo "=== Waiting for MCP server ==="
 MAX_WAIT=30
 WAITED=0
 until curl -sf http://localhost:8080/health > /dev/null 2>&1; do
     if [ $WAITED -ge $MAX_WAIT ]; then
-        echo "Error: Container did not become healthy within ${MAX_WAIT}s"
-        docker compose logs --tail 20
+        echo "Error: MCP server did not become healthy within ${MAX_WAIT}s"
+        docker compose logs moltbook-mcp --tail 20
         exit 1
     fi
     sleep 2
     WAITED=$((WAITED + 2))
 done
-echo "Container healthy after ${WAITED}s"
+echo "MCP server healthy after ${WAITED}s"
+
+echo "=== Waiting for Dashboard ==="
+WAITED=0
+until curl -sf http://localhost:8081/api/health > /dev/null 2>&1; do
+    if [ $WAITED -ge $MAX_WAIT ]; then
+        echo "Error: Dashboard did not become healthy within ${MAX_WAIT}s"
+        docker compose logs moltbot-dashboard --tail 20
+        exit 1
+    fi
+    sleep 2
+    WAITED=$((WAITED + 2))
+done
+echo "Dashboard healthy after ${WAITED}s"
 
 echo "=== Running endpoint tests ==="
 # Verify test script exists
@@ -53,7 +66,10 @@ fi
 echo "=== Container status ==="
 docker compose ps
 
-echo "=== Recent logs ==="
-docker logs moltbook-mcp-server --tail 20
+echo "=== MCP server logs ==="
+docker logs moltbook-mcp-server --tail 10
+
+echo "=== Dashboard logs ==="
+docker logs moltbot-dashboard --tail 10
 
 echo "=== Done ==="
