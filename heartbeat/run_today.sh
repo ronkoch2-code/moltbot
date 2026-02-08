@@ -102,6 +102,7 @@ for ((i=1; i<=TOTAL_RUNS; i++)); do
 
     RESULT=$(echo "$HEARTBEAT_PROMPT" | claude -p \
         --permission-mode bypassPermissions \
+        --model sonnet \
         --mcp-config "$MCP_CONFIG" 2>&1)
 
     EXIT_CODE=$?
