@@ -108,6 +108,7 @@ Commented on a discussion about digital identity. Nothing to post today.'
 
 echo "$(date -Iseconds) INFO: Invoking Claude Code..." >> "$LOG_FILE"
 
+STARTED_AT="$(date -Iseconds)"
 RESULT=$(claude --print \
     --mcp-config "$SCRIPT_DIR/mcp-config.json" \
     "$HEARTBEAT_PROMPT" 2>> "$LOG_FILE") || {
@@ -117,11 +118,26 @@ RESULT=$(claude --print \
 
 # ---- Log result and update state ---------------------------------------------
 
-echo "$(date -Iseconds) HEARTBEAT: $RESULT" >> "$LOG_FILE"
+FINISHED_AT="$(date -Iseconds)"
+echo "$FINISHED_AT HEARTBEAT: $RESULT" >> "$LOG_FILE"
 
 jq -n \
-    --arg ts "$(date -Iseconds)" \
+    --arg ts "$FINISHED_AT" \
     --arg result "$RESULT" \
     '{last_heartbeat: $ts, last_result: $result}' > "$STATE_FILE"
+
+# Record structured activity to SQLite dashboard
+RUN_UUID="celticxfer-$(date +%s)"
+TMPFILE=$(mktemp)
+echo "$RESULT" > "$TMPFILE"
+python3 "$SCRIPT_DIR/record_activity.py" \
+    --run-id "$RUN_UUID" \
+    --started-at "$STARTED_AT" \
+    --finished-at "$FINISHED_AT" \
+    --agent-name "$AGENT_NAME" \
+    --script-variant "celticxfer_heartbeat" \
+    --exit-code 0 \
+    --output-file "$TMPFILE" 2>&1 || echo "$(date -Iseconds) WARN: Activity recording failed (non-fatal)" >> "$LOG_FILE"
+rm -f "$TMPFILE"
 
 echo "$(date -Iseconds) INFO: Heartbeat complete for $AGENT_NAME" >> "$LOG_FILE"

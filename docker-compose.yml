@@ -46,6 +46,22 @@ services:
     networks:
       - moltbook-net
 
+  moltbot-dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: moltbot-dashboard
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - HEARTBEAT_DB_PATH=/app/data/heartbeat.db
+    networks:
+      - moltbook-net
+
   # Optional: a lightweight cron-style heartbeat container
   # Uncomment to enable periodic feed browsing
   #

@@ -103,6 +103,7 @@ while true; do
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 
+    STARTED_AT="$(date -Iseconds)"
     RESULT=$(echo "$HEARTBEAT_PROMPT" | claude -p \
         --permission-mode bypassPermissions \
         --model sonnet \
@@ -120,12 +121,28 @@ while true; do
     fi
 
     # Log and update state
-    echo "$(date -Iseconds) HEARTBEAT $RUN_COUNT: $RESULT" >> "$LOG_FILE"
+    FINISHED_AT="$(date -Iseconds)"
+    echo "$FINISHED_AT HEARTBEAT $RUN_COUNT: $RESULT" >> "$LOG_FILE"
     jq -n \
-        --arg ts "$(date -Iseconds)" \
+        --arg ts "$FINISHED_AT" \
         --arg run "$RUN_COUNT" \
         --arg result "$RESULT" \
         '{last_heartbeat: $ts, run_number: $run, last_result: $result}' > "$STATE_FILE"
+
+    # Record structured activity to SQLite dashboard
+    RUN_UUID="run-today-$(date +%s)-${RUN_COUNT}"
+    TMPFILE=$(mktemp)
+    echo "$RESULT" > "$TMPFILE"
+    python3 "$SCRIPT_DIR/record_activity.py" \
+        --run-id "$RUN_UUID" \
+        --started-at "$STARTED_AT" \
+        --finished-at "$FINISHED_AT" \
+        --agent-name "$AGENT_NAME" \
+        --script-variant "run_today" \
+        --run-number "$RUN_COUNT" \
+        --exit-code "$EXIT_CODE" \
+        --output-file "$TMPFILE" 2>&1 || echo "⚠️  Activity recording failed (non-fatal)"
+    rm -f "$TMPFILE"
 
     echo ""
 

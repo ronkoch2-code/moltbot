@@ -25,8 +25,12 @@ Claude/AI  →  MCP Server (Docker, localhost:8080)  →  moltbook.com API
 | `config/credentials.example.json` | API credential template |
 | `.env.example` | Environment variable template |
 | `tests/` | Pytest test suite |
-| `pyproject.toml` | Project config and pytest settings |
+| `pyproject.toml` | Project config, pytest settings, ruff config |
 | `requirements-dev.txt` | Dev/test dependencies |
+| `dashboard/` | Heartbeat activity dashboard (FastAPI + React) |
+| `heartbeat/record_activity.py` | Structured activity recorder |
+| `.pre-commit-config.yaml` | Pre-commit hook configuration |
+| `.secrets.baseline` | detect-secrets baseline for token scanning |
 
 ## Tech Stack
 
@@ -228,6 +232,98 @@ Every Moltbook agent must be verified by a human via Twitter/X. This:
 - Links the agent to a real human identity
 - Prevents spam and bot abuse
 - Enables accountability for agent behavior
+
+## Heartbeat Activity Dashboard
+
+The dashboard monitors CelticXfer's automated heartbeat activity on Moltbook.
+
+### Architecture
+
+```
+Heartbeat scripts → record_activity.py → SQLite (data/heartbeat.db)
+Dashboard API (FastAPI :8081) → SQLite → React webapp (static files)
+```
+
+### Key Dashboard Files
+
+| File | Purpose |
+|------|---------|
+| `dashboard/api/main.py` | FastAPI app, static file serving, CORS |
+| `dashboard/api/database.py` | SQLite connection, schema init, WAL mode |
+| `dashboard/api/models.py` | Pydantic response models |
+| `dashboard/api/routers/runs.py` | Run CRUD endpoints |
+| `dashboard/api/routers/actions.py` | Action endpoints |
+| `dashboard/api/routers/stats.py` | Aggregate statistics |
+| `dashboard/webapp/` | React 19 + TypeScript + Tailwind CSS 4 |
+| `dashboard/Dockerfile` | Multi-stage build (Node + Python) |
+| `heartbeat/record_activity.py` | Parses Claude output, writes to SQLite |
+| `heartbeat/backfill_from_log.py` | One-time migration from heartbeat.log |
+
+### Running the Dashboard
+
+```bash
+# Build and start (with MCP server)
+docker compose up --build -d
+
+# Dashboard accessible at
+curl http://localhost:8081/api/health
+
+# Backfill historical data from logs
+python3 heartbeat/backfill_from_log.py
+```
+
+### Dashboard API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/health` | GET | Health check |
+| `/api/runs` | GET | List runs (paginated, filterable) |
+| `/api/runs` | POST | Record new run |
+| `/api/runs/{run_id}` | GET | Single run with actions |
+| `/api/runs/{run_id}` | PATCH | Update run |
+| `/api/runs/{run_id}/actions` | GET/POST | Actions for a run |
+| `/api/actions` | GET | All actions (filterable) |
+| `/api/stats` | GET | Aggregate stats |
+| `/api/stats/timeline` | GET | Daily counts for charting |
+
+## Code Quality and Pre-commit Hooks
+
+This project uses pre-commit hooks to enforce code quality at check-in time.
+
+### Setup
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+### Hooks Configured
+
+| Hook | Purpose |
+|------|---------|
+| **ruff** | Python linting (pycodestyle, pyflakes, isort, bugbear, bandit) |
+| **ruff-format** | Python code formatting (consistent style) |
+| **detect-secrets** | Scans for API keys, tokens, passwords, credentials |
+| **shellcheck** | Shell script linting and best practices |
+| **trailing-whitespace** | Removes trailing whitespace |
+| **end-of-file-fixer** | Ensures files end with newline |
+| **check-yaml/json** | Validates YAML/JSON syntax |
+| **check-added-large-files** | Blocks files >500KB |
+| **no-commit-to-branch** | Prevents direct commits to main |
+
+### Manual Usage
+
+```bash
+# Run all hooks on all files
+pre-commit run --all-files
+
+# Run specific hook
+pre-commit run ruff --all-files
+pre-commit run detect-secrets --all-files
+
+# Update hook versions
+pre-commit autoupdate
+```
 
 ## Known Pitfalls
 

@@ -1,90 +1,101 @@
 # Development State — Moltbot
 
 ## Current Task
-Fixing Claude Desktop MCP bridge connectivity.
+Heartbeat Activity Dashboard + Pre-commit Hooks
 
-## Active Work — 2026-02-07
+## Plan — 2026-02-08
 
-### Bridge/Server Debugging
-- [x] Fixed `app_lifespan()` signature — MCP framework passes `app` argument
-- [x] Rewrote `stdio_bridge.py` to use raw sockets for proper chunked/SSE handling
-- [ ] User needs to rebuild containers and restart Claude Desktop to test
+### Block 4: Heartbeat Activity Dashboard
+- [x] **4.1** Create directory structure and data/.gitkeep
+- [x] **4.2** Write database.py (SQLite, WAL mode, schema) and models.py (Pydantic)
+- [x] **4.3** Write record_activity.py (parse Claude output, extract actions)
+- [x] **4.4** Write backfill_from_log.py (migrate heartbeat.log to SQLite)
+- [x] **4.5** Write FastAPI dashboard API (main.py, runs/actions/stats routers)
+- [x] **4.6** Modify run_today.sh and celticxfer_heartbeat.sh for record_activity.py
+- [x] **4.7** Write React webapp (Vite + React 19 + TypeScript + Tailwind 4)
+- [x] **4.8** Write dashboard/Dockerfile (multi-stage Node + Python)
+- [x] **4.9** Update docker-compose.yml with dashboard service
+- [x] **4.10** Write tests (test_record_activity.py, test_dashboard_api.py)
+- [x] **4.11** Update .gitignore, CLAUDE.md, DEVELOPMENT_STATE.md
 
-## Plan
-
-### Block 1: Fix Broken Health Check
-- [x] **1.1** Modify `server.py` entrypoint — wrap FastMCP's streamable HTTP app in a Starlette application that also mounts a `/health` route returning JSON status. Keep `stdio` transport branch unchanged.
-- [x] **1.2** Simplify Dockerfile `HEALTHCHECK` command — switch from `httpx` import to stdlib `urllib.request` to avoid loading heavy dependencies for a simple GET.
-- [x] **1.3** Update `CLAUDE.md` health check reference to stay consistent.
-
----
-
-### Block 2: Create Test Suite
-- [x] **2.1** Create test infrastructure — `tests/__init__.py`, `tests/conftest.py`, `pyproject.toml`, `requirements-dev.txt`.
-- [x] **2.2** Create `tests/test_content_filter.py` — 17 tests covering regex scanning, scan_text(), filter_post/posts/comments.
-- [x] **2.3** Create `tests/test_models.py` — 25 tests covering all Pydantic input models.
-- [x] **2.4** Create `tests/test_server.py` — 13 tests covering credential loading, HTTP error mapping, API requests.
-- [x] **2.5** Create `tests/test_health.py` — 3 tests for `/health` endpoint.
-- [x] **2.6** Update `.gitignore` — add `.pytest_cache/`, `htmlcov/`, `.coverage`.
-
----
-
-### Block 3: Configurable Threshold & Log Level
-- [x] **3.1** Modify `content_filter.py` — read `CONTENT_FILTER_THRESHOLD` from env var, default to 0.5.
-- [x] **3.2** Modify `server.py` — add `logging.basicConfig()` driven by `LOG_LEVEL` env var, default to INFO.
-- [x] **3.3** Update `docker-compose.yml` — pass through `CONTENT_FILTER_THRESHOLD` and `LOG_LEVEL` env vars.
-- [x] **3.4** Update `.env.example` — add both new env vars with comments.
-- [x] **3.5** Add test `TestConfigurableThreshold` to `tests/test_content_filter.py`.
-- [x] **3.6** Update `CLAUDE.md` — mention configurable threshold, log level, and testing section.
+### Block 5: Pre-commit Hooks (Lint, Format, Secret Scanning)
+- [x] **5.1** Create .pre-commit-config.yaml (ruff, detect-secrets, shellcheck, pre-commit-hooks)
+- [x] **5.2** Add ruff configuration to pyproject.toml
+- [x] **5.3** Create .secrets.baseline for detect-secrets
+- [x] **5.4** Update requirements-dev.txt with ruff, pre-commit, detect-secrets
+- [x] **5.5** Document hooks in CLAUDE.md
 
 ---
 
 ## Completed Work
 
+### 2026-02-08 — Heartbeat Activity Dashboard
+
+**What**: Built a complete monitoring dashboard for CelticXfer's heartbeat activity on Moltbook.
+
+**Architecture**:
+- SQLite database (data/heartbeat.db) stores structured run + action data
+- Python CLI (record_activity.py) parses Claude output with regex, extracts actions
+- FastAPI API (port 8081) serves paginated runs, actions, stats, timeline
+- React 19 webapp with TypeScript + Tailwind CSS 4 dark theme dashboard
+- Multi-stage Docker build (Node + Python)
+- Backfill script migrates existing heartbeat.log data
+
+**Files Created**:
+- `data/.gitkeep`
+- `dashboard/api/__init__.py`, `routers/__init__.py`
+- `dashboard/api/database.py` — SQLite with WAL mode, schema management
+- `dashboard/api/models.py` — Pydantic response models
+- `dashboard/api/main.py` — FastAPI app with CORS, static serving
+- `dashboard/api/routers/runs.py` — Run CRUD with pagination/filtering
+- `dashboard/api/routers/actions.py` — Action endpoints
+- `dashboard/api/routers/stats.py` — Aggregate stats and timeline
+- `dashboard/api/requirements.txt`
+- `dashboard/Dockerfile` — Multi-stage Node 22 + Python 3.12-slim
+- `dashboard/webapp/` — Full React app (19 files)
+- `heartbeat/record_activity.py` — Activity parser with 8 action types
+- `heartbeat/backfill_from_log.py` — Log migration script
+- `tests/test_record_activity.py` — 20 parser/recording tests
+- `tests/test_dashboard_api.py` — 16 API endpoint tests
+
+**Files Modified**:
+- `heartbeat/run_today.sh` — Added record_activity.py call after each run
+- `heartbeat/celticxfer_heartbeat.sh` — Same addition
+- `docker-compose.yml` — Added moltbot-dashboard service
+- `.gitignore` — Added dashboard/data exclusions
+- `CLAUDE.md` — Added Dashboard and Pre-commit Hooks documentation
+- `DEVELOPMENT_STATE.md` — Updated with current plan
+
+### 2026-02-08 — Pre-commit Hooks
+
+**What**: Configured pre-commit hooks for linting, formatting, and secret scanning at check-in.
+
+**Files Created**:
+- `.pre-commit-config.yaml` — ruff, detect-secrets, shellcheck, pre-commit-hooks
+- `.secrets.baseline` — detect-secrets baseline
+
+**Files Modified**:
+- `pyproject.toml` — Added ruff lint/format configuration
+- `requirements-dev.txt` — Added ruff, pre-commit, detect-secrets
+- `CLAUDE.md` — Documented hooks
+
+### 2026-02-07 — Bridge/Server Debugging
+- Fixed `app_lifespan()` signature — MCP framework passes `app` argument
+- Rewrote `stdio_bridge.py` to use raw sockets for proper chunked/SSE handling
+
 ### 2026-02-06 — Initial Development Session
-
-**Block 1: Health Check Fix**
-- Added `/health` endpoint to `server.py` using Starlette wrapper around FastMCP
-- Simplified Dockerfile HEALTHCHECK to use stdlib `urllib.request` instead of httpx
-- Container now properly reports HEALTHY status
-
-**Block 2: Test Suite**
+- Added `/health` endpoint to `server.py` using Starlette wrapper
 - Created comprehensive pytest suite with 58 tests
-- Tests cover content filtering, Pydantic models, server helpers, health endpoint
-- All tests run in regex-only mode (no ML model needed) for speed
-
-**Block 3: Configuration**
-- `CONTENT_FILTER_THRESHOLD` env var controls ML detection sensitivity (default: 0.5)
-- `LOG_LEVEL` env var controls logging verbosity (default: INFO)
-- Both vars documented in `.env.example` and passed through `docker-compose.yml`
-
-**Files Created:**
-- `tests/__init__.py`
-- `tests/conftest.py`
-- `tests/test_content_filter.py`
-- `tests/test_models.py`
-- `tests/test_server.py`
-- `tests/test_health.py`
-- `pyproject.toml`
-- `requirements-dev.txt`
-
-**Files Modified:**
-- `server.py` — Starlette wrapper, health endpoint, logging config
-- `content_filter.py` — Configurable threshold
-- `Dockerfile` — Simplified HEALTHCHECK
-- `docker-compose.yml` — New env vars
-- `.env.example` — New env vars documented
-- `.gitignore` — Pytest/coverage artifacts
-- `CLAUDE.md` — Updated docs for testing, configuration, key files
+- Added `CONTENT_FILTER_THRESHOLD` and `LOG_LEVEL` env vars
 
 ## Known Issues
-_(none — all previously known issues resolved)_
+_(none)_
 
 ## Not In Scope (Future Sessions)
-- CI/CD pipeline (GitHub Actions) — depends on test suite existing first
-- `heartbeat.py` autonomous agent loop — needs design decisions on Anthropic API integration
-- Docker resource limits (`mem_limit`, `cpus`) — quick fix for next session
+- CI/CD pipeline (GitHub Actions)
+- Docker resource limits (`mem_limit`, `cpus`)
 - Pagination/cursor support for feed browsing
 - Post/comment editing & deletion tools
 - Search functionality
 - Retry logic on transient 5xx errors
+- Security review remediation (see security-review/)

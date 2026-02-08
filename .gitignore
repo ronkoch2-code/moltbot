@@ -26,6 +26,13 @@ htmlcov/
 .coverage
 coverage.xml
 
+# Dashboard
+data/heartbeat.db
+data/heartbeat.db-wal
+data/heartbeat.db-shm
+dashboard/webapp/node_modules/
+dashboard/webapp/dist/
+
 # Docker
 docker-compose.override.yml
 
