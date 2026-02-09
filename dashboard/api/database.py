@@ -113,6 +113,20 @@ CREATE TABLE IF NOT EXISTS behavior_oddities (
 CREATE INDEX IF NOT EXISTS idx_oddities_oddity_type ON behavior_oddities(oddity_type);
 CREATE INDEX IF NOT EXISTS idx_oddities_severity ON behavior_oddities(severity);
 CREATE INDEX IF NOT EXISTS idx_oddities_detected_at ON behavior_oddities(detected_at);
+
+CREATE TABLE IF NOT EXISTS blocked_authors (
+    id              SERIAL PRIMARY KEY,
+    author_name     TEXT NOT NULL UNIQUE,
+    blocked_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    reason          TEXT,
+    flag_count      INTEGER NOT NULL DEFAULT 0,
+    unblocked_at    TIMESTAMPTZ,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_blocked_authors_name ON blocked_authors(author_name);
+CREATE INDEX IF NOT EXISTS idx_blocked_authors_active ON blocked_authors(is_active);
 """
 
 

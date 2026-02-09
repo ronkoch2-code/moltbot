@@ -245,6 +245,42 @@ class SecurityStatsOut(BaseModel):
     critical_oddities: int = 0
 
 
+class BlockedAuthorOut(BaseModel):
+    """A blocked author record."""
+
+    id: int
+    author_name: str
+    blocked_at: str
+    reason: str | None = None
+    flag_count: int = 0
+    unblocked_at: str | None = None
+    is_active: bool = True
+    created_at: str
+
+
+class PaginatedBlockedAuthors(BaseModel):
+    """Paginated list of blocked authors."""
+
+    authors: list[BlockedAuthorOut]
+    total: int
+    page: int
+    per_page: int
+    total_pages: int
+
+
+class BlockAuthorIn(BaseModel):
+    """Input for manually blocking an author."""
+
+    author_name: str
+    reason: str | None = None
+
+
+class UnblockAuthorIn(BaseModel):
+    """Input for manually unblocking an author."""
+
+    author_name: str
+
+
 class HealthOut(BaseModel):
     """Health check response."""
 

@@ -415,6 +415,77 @@ def collect_docker_logs(
 
 
 # ---------------------------------------------------------------------------
+# Blocklist synchronization
+# ---------------------------------------------------------------------------
+
+
+def sync_blocklist(conn, blocklist_path: str) -> int:
+    """Synchronize blocked authors from JSON file to PostgreSQL.
+
+    Parameters
+    ----------
+    conn : psycopg2 connection
+        Database connection.
+    blocklist_path : str
+        Path to blocked_authors.json.
+
+    Returns
+    -------
+    int
+        Number of authors synchronized.
+    """
+    if not Path(blocklist_path).exists():
+        return 0
+
+    try:
+        with open(blocklist_path) as f:
+            blocklist = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"  Warning: Could not read blocklist: {e}", file=sys.stderr)
+        return 0
+
+    if not blocklist:
+        return 0
+
+    count = 0
+    cur = conn.cursor()
+
+    for author_name, data in blocklist.items():
+        # Derive is_active from expires_at
+        expires_at = data.get("expires_at")
+        is_active = expires_at is None or expires_at > datetime.now(timezone.utc).isoformat()
+
+        try:
+            cur.execute(
+                """INSERT INTO blocked_authors
+                   (author_name, blocked_at, reason, flag_count, unblocked_at, is_active)
+                   VALUES (%s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (author_name) DO UPDATE SET
+                       blocked_at = EXCLUDED.blocked_at,
+                       reason = EXCLUDED.reason,
+                       flag_count = EXCLUDED.flag_count,
+                       unblocked_at = EXCLUDED.unblocked_at,
+                       is_active = EXCLUDED.is_active""",
+                (
+                    author_name,
+                    data.get("blocked_at"),
+                    data.get("reason"),
+                    data.get("flag_count", 0),
+                    expires_at,
+                    is_active,
+                ),
+            )
+            count += 1
+        except psycopg2.IntegrityError:
+            conn.rollback()
+
+    conn.commit()
+    if count:
+        print(f"  Synchronized {count} blocked authors", file=sys.stderr)
+    return count
+
+
+# ---------------------------------------------------------------------------
 # Oddity detection
 # ---------------------------------------------------------------------------
 
@@ -591,7 +662,11 @@ def main() -> None:
         )
         state["last_docker_ts"] = new_ts
 
-        # 3. Oddity detection
+        # 3. Sync blocklist from MCP container JSON
+        blocklist_path = str(Path(args.audit_log).parent / "blocked_authors.json")
+        sync_blocklist(conn, blocklist_path)
+
+        # 4. Oddity detection
         if args.detect_oddities:
             detect_oddities(conn, args.since_minutes)
 

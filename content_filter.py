@@ -17,7 +17,7 @@ from logging.handlers import RotatingFileHandler
 import os
 import re
 from collections import OrderedDict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 logger = logging.getLogger("moltbook_mcp.content_filter")
@@ -161,6 +161,297 @@ def _cache_put(text: str, result: Dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Author blocklist — automatically block repeat injection offenders
+# ---------------------------------------------------------------------------
+
+AUTHOR_BLOCK_THRESHOLD = int(os.environ.get("AUTHOR_BLOCK_THRESHOLD", "3"))
+AUTHOR_BLOCK_DURATION_HOURS = int(os.environ.get("AUTHOR_BLOCK_DURATION_HOURS", "0"))  # 0 = permanent
+BLOCKLIST_PATH = os.environ.get("BLOCKLIST_PATH", "")
+
+# In-memory state
+_author_flags: Dict[str, Dict[str, Any]] = {}
+_blocked_authors: Dict[str, Dict[str, Any]] = {}
+
+
+def _load_blocklist() -> None:
+    """Load the author blocklist from disk.
+
+    If BLOCKLIST_PATH is not set or the file doesn't exist, this is a no-op.
+    The blocklist is stored as JSON with the format:
+    {
+        "author_name": {
+            "blocked_at": "ISO timestamp",
+            "expires_at": "ISO timestamp or null",
+            "reason": "threshold exceeded",
+            "flag_count": 5
+        }
+    }
+    """
+    global _blocked_authors
+    if not BLOCKLIST_PATH:
+        return
+
+    try:
+        if os.path.exists(BLOCKLIST_PATH):
+            with open(BLOCKLIST_PATH, "r") as f:
+                data = json.load(f)
+                _blocked_authors = data if isinstance(data, dict) else {}
+                logger.info(f"Loaded {len(_blocked_authors)} blocked authors from {BLOCKLIST_PATH}")
+        else:
+            logger.info(f"No existing blocklist found at {BLOCKLIST_PATH}")
+    except Exception as e:
+        logger.error(f"Failed to load blocklist from {BLOCKLIST_PATH}: {e}")
+
+
+def _save_blocklist() -> None:
+    """Save the author blocklist to disk using atomic write (tmp + rename).
+
+    If BLOCKLIST_PATH is not set, this is a no-op.
+    """
+    if not BLOCKLIST_PATH:
+        return
+
+    try:
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(BLOCKLIST_PATH), exist_ok=True)
+
+        # Atomic write: write to temp file, then rename
+        tmp_path = f"{BLOCKLIST_PATH}.tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(_blocked_authors, f, indent=2)
+        os.replace(tmp_path, BLOCKLIST_PATH)
+        logger.info(f"Saved blocklist ({len(_blocked_authors)} authors) to {BLOCKLIST_PATH}")
+    except Exception as e:
+        logger.error(f"Failed to save blocklist to {BLOCKLIST_PATH}: {e}")
+
+
+def _is_author_blocked(author_name: str) -> bool:
+    """Check if an author is currently blocked.
+
+    Handles time-based expiration: if the block has expired, removes the
+    author from the blocklist and returns False.
+
+    Parameters
+    ----------
+    author_name : str
+        The author name to check.
+
+    Returns
+    -------
+    bool
+        True if the author is currently blocked.
+    """
+    if not author_name or author_name == "unknown":
+        return False
+
+    if author_name not in _blocked_authors:
+        return False
+
+    block_info = _blocked_authors[author_name]
+    expires_at = block_info.get("expires_at")
+
+    # Permanent block (expires_at is None or 0)
+    if not expires_at:
+        return True
+
+    # Time-based block — check expiration
+    try:
+        expiry = datetime.fromisoformat(expires_at)
+        now = datetime.now(timezone.utc)
+
+        if now >= expiry:
+            # Block has expired — remove and save
+            del _blocked_authors[author_name]
+            _save_blocklist()
+            logger.info(f"Author block expired for {author_name}")
+            return False
+        else:
+            return True
+    except Exception as e:
+        logger.warning(f"Invalid expires_at for {author_name}: {expires_at} — {e}")
+        # Treat as permanent block if timestamp is malformed
+        return True
+
+
+def _record_author_flag(author_name: str, flags: List[str]) -> None:
+    """Record that an author posted flagged content.
+
+    Increments the flag counter for this author. If the counter reaches
+    AUTHOR_BLOCK_THRESHOLD, the author is automatically added to the blocklist.
+
+    Parameters
+    ----------
+    author_name : str
+        The author name to record.
+    flags : list[str]
+        The security flags that were detected.
+    """
+    if not author_name or author_name == "unknown":
+        return
+
+    # Initialize or increment flag counter
+    if author_name not in _author_flags:
+        _author_flags[author_name] = {
+            "count": 0,
+            "first_flagged": datetime.now(timezone.utc).isoformat(),
+            "last_flagged": datetime.now(timezone.utc).isoformat(),
+            "recent_flags": []
+        }
+
+    flag_info = _author_flags[author_name]
+    flag_info["count"] += 1
+    flag_info["last_flagged"] = datetime.now(timezone.utc).isoformat()
+    flag_info["recent_flags"].append({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "flags": flags
+    })
+
+    # Keep only the last 10 flag events
+    if len(flag_info["recent_flags"]) > 10:
+        flag_info["recent_flags"] = flag_info["recent_flags"][-10:]
+
+    logger.info(f"Author {author_name} flag count: {flag_info['count']}/{AUTHOR_BLOCK_THRESHOLD}")
+
+    # Auto-block if threshold reached
+    if flag_info["count"] >= AUTHOR_BLOCK_THRESHOLD and author_name not in _blocked_authors:
+        now = datetime.now(timezone.utc)
+
+        # Calculate expiration if duration is set
+        expires_at = None
+        if AUTHOR_BLOCK_DURATION_HOURS > 0:
+            expiry = now + timedelta(hours=AUTHOR_BLOCK_DURATION_HOURS)
+            expires_at = expiry.isoformat()
+
+        _blocked_authors[author_name] = {
+            "blocked_at": now.isoformat(),
+            "expires_at": expires_at,
+            "reason": "threshold exceeded",
+            "flag_count": flag_info["count"]
+        }
+
+        _save_blocklist()
+
+        duration_str = f"{AUTHOR_BLOCK_DURATION_HOURS}h" if expires_at else "permanent"
+        logger.warning(f"Author {author_name} auto-blocked ({duration_str}) — flag threshold exceeded")
+
+        # Audit log the block event
+        try:
+            audit_entry = {
+                "timestamp": now.isoformat(),
+                "event": "author_blocked",
+                "author": author_name,
+                "flag_count": flag_info["count"],
+                "threshold": AUTHOR_BLOCK_THRESHOLD,
+                "duration": duration_str,
+                "recent_flags": flag_info["recent_flags"]
+            }
+            _get_security_logger().info(json.dumps(audit_entry))
+        except Exception as e:
+            logger.warning(f"Failed to write author block audit log: {e}")
+
+
+def unblock_author(author_name: str) -> bool:
+    """Manually unblock an author and reset their flag counter.
+
+    Parameters
+    ----------
+    author_name : str
+        The author name to unblock.
+
+    Returns
+    -------
+    bool
+        True if the author was blocked and is now unblocked.
+    """
+    if author_name not in _blocked_authors:
+        return False
+
+    del _blocked_authors[author_name]
+    if author_name in _author_flags:
+        del _author_flags[author_name]
+
+    _save_blocklist()
+    logger.info(f"Author {author_name} manually unblocked")
+
+    # Audit log the unblock
+    try:
+        audit_entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": "author_unblocked",
+            "author": author_name,
+            "method": "manual"
+        }
+        _get_security_logger().info(json.dumps(audit_entry))
+    except Exception as e:
+        logger.warning(f"Failed to write author unblock audit log: {e}")
+
+    return True
+
+
+def get_blocked_authors() -> Dict[str, Dict[str, Any]]:
+    """Get a copy of the current blocklist.
+
+    Returns
+    -------
+    dict
+        A copy of the blocked authors dictionary.
+    """
+    return _blocked_authors.copy()
+
+
+def get_author_flags() -> Dict[str, Dict[str, Any]]:
+    """Get a copy of the author flag counters.
+
+    Returns
+    -------
+    dict
+        A copy of the author flags dictionary.
+    """
+    return _author_flags.copy()
+
+
+def _extract_author_name(post: Dict[str, Any]) -> str:
+    """Extract the author name from a post object.
+
+    Handles various post shapes:
+    - Flat: {"author_name": "alice"}
+    - Nested: {"author": {"name": "alice"}}
+    - String: {"author": "alice"}
+    - Missing: returns "unknown"
+
+    Parameters
+    ----------
+    post : dict
+        The post object.
+
+    Returns
+    -------
+    str
+        The author name or "unknown".
+    """
+    author = post.get("author")
+
+    # Nested author dict with name key
+    if isinstance(author, dict):
+        return author.get("name", "unknown")
+
+    # String author field
+    if isinstance(author, str):
+        return author
+
+    # Flat author_name field
+    author_name = post.get("author_name")
+    if isinstance(author_name, str):
+        return author_name
+
+    return "unknown"
+
+
+# Load blocklist at module initialization
+_load_blocklist()
+
+
+# ---------------------------------------------------------------------------
 # Regex patterns — catch things the ML model may not flag
 # ---------------------------------------------------------------------------
 
@@ -289,6 +580,36 @@ def filter_post(post: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(post, dict):
         return post
 
+    # --- Layer 0: Author blocklist pre-check ---
+    author_name = _extract_author_name(post)
+    if _is_author_blocked(author_name):
+        # Redact all user-controllable fields
+        for field in ("title", "content", "name", "description", "author_name", "submolt_name"):
+            if field in post:
+                post[field] = "[REDACTED — blocked author]"
+
+        post["_security"] = {
+            "blocked_author": True,
+            "author": author_name,
+            "filtered": True,
+        }
+
+        # Audit log the blocked content
+        try:
+            audit_entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "event": "blocked_author_content",
+                "post_id": post.get("id", "unknown"),
+                "author": author_name,
+                "submolt": post.get("submolt", post.get("submolt_name", "unknown")),
+            }
+            _get_security_logger().info(json.dumps(audit_entry))
+        except Exception as e:
+            logger.warning(f"Failed to write blocked author audit log: {e}")
+
+        return post
+
+    # --- Layer 1 & 2: ML + Regex scanning ---
     flags: List[str] = []
     max_risk = 0.0
 
@@ -302,6 +623,8 @@ def filter_post(post: Dict[str, Any]) -> Dict[str, Any]:
                 post[field] = result["sanitised"]
 
     if flags:
+        # Record author flag for repeat offender tracking
+        _record_author_flag(author_name, flags)
         post["_security"] = {
             "flags": flags,
             "risk_score": round(max_risk, 4),

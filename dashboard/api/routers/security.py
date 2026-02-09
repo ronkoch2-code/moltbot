@@ -6,13 +6,17 @@ from fastapi import APIRouter, HTTPException, Query
 
 from dashboard.api.database import get_db
 from dashboard.api.models import (
+    BlockAuthorIn,
+    BlockedAuthorOut,
     OddityOut,
+    PaginatedBlockedAuthors,
     PaginatedOddities,
     PaginatedSecurityEvents,
     PaginatedToolCalls,
     SecurityEventOut,
     SecurityStatsOut,
     ToolCallOut,
+    UnblockAuthorIn,
 )
 
 router = APIRouter(prefix="/api/security", tags=["security"])
@@ -275,3 +279,101 @@ def get_security_timeline(
         }
         for row in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Blocked authors endpoints
+# ---------------------------------------------------------------------------
+
+
+def _row_to_blocked_author(row: dict) -> BlockedAuthorOut:
+    """Convert a database row to a BlockedAuthorOut model."""
+    return BlockedAuthorOut(
+        **{
+            k: str(v) if k in ("created_at", "blocked_at", "unblocked_at") and v is not None else v
+            for k, v in row.items()
+        }
+    )
+
+
+@router.get("/blocked-authors", response_model=PaginatedBlockedAuthors)
+def list_blocked_authors(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    active_only: bool = Query(True),
+):
+    """List blocked authors with pagination."""
+    conditions = []
+    params: list = []
+
+    if active_only:
+        conditions.append("is_active = TRUE")
+
+    where = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT COUNT(*) as total FROM blocked_authors {where}", params
+        )
+        total = cur.fetchone()["total"]
+
+        offset = (page - 1) * per_page
+        cur.execute(
+            f"""SELECT * FROM blocked_authors {where}
+                ORDER BY blocked_at DESC LIMIT %s OFFSET %s""",
+            [*params, per_page, offset],
+        )
+        rows = cur.fetchall()
+
+    return PaginatedBlockedAuthors(
+        authors=[_row_to_blocked_author(row) for row in rows],
+        total=total,
+        page=page,
+        per_page=per_page,
+        total_pages=max(1, math.ceil(total / per_page)),
+    )
+
+
+@router.post("/blocked-authors", response_model=BlockedAuthorOut, status_code=201)
+def block_author(body: BlockAuthorIn):
+    """Manually add an author to the blocklist."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO blocked_authors (author_name, reason, flag_count, is_active)
+               VALUES (%s, %s, 0, TRUE)
+               ON CONFLICT (author_name)
+               DO UPDATE SET is_active = TRUE, blocked_at = NOW(),
+                            reason = EXCLUDED.reason, unblocked_at = NULL
+               RETURNING *""",
+            (body.author_name, body.reason or "Manually blocked"),
+        )
+        row = cur.fetchone()
+        conn.commit()
+
+    return _row_to_blocked_author(row)
+
+
+@router.post("/blocked-authors/unblock", response_model=BlockedAuthorOut)
+def unblock_author_endpoint(body: UnblockAuthorIn):
+    """Remove an author from the blocklist."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """UPDATE blocked_authors
+               SET is_active = FALSE, unblocked_at = NOW()
+               WHERE author_name = %s AND is_active = TRUE
+               RETURNING *""",
+            (body.author_name,),
+        )
+        row = cur.fetchone()
+        conn.commit()
+
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Author '{body.author_name}' is not currently blocked",
+        )
+
+    return _row_to_blocked_author(row)

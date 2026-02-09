@@ -78,6 +78,12 @@ services:
       - DASHBOARD_API_URL=${DASHBOARD_API_URL:-http://moltbot-dashboard:8081}
       # Security audit log path (JSONL format for injection event tracking)
       - SECURITY_LOG_PATH=/app/logs/security_audit.jsonl
+      # Author blocklist: auto-block after N injection flags (default: 3, 0 = disabled)
+      - AUTHOR_BLOCK_THRESHOLD=${AUTHOR_BLOCK_THRESHOLD:-3}
+      # Block duration in hours (default: 0 = permanent until manual unblock)
+      - AUTHOR_BLOCK_DURATION_HOURS=${AUTHOR_BLOCK_DURATION_HOURS:-0}
+      # Blocklist persistence file path (on writable /app/logs volume)
+      - BLOCKLIST_PATH=/app/logs/blocked_authors.json
     # --- Resource limits ---
     mem_limit: 4g
     memswap_limit: 4g
