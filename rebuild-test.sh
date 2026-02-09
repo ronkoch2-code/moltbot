@@ -1,6 +1,6 @@
 #!/bin/bash
 # Rebuild, restart, and test the MCP server
-# Run from project root on the Docker host
+# Run from project root on the Docker host (with sudo/elevated access)
 
 set -e
 
@@ -22,6 +22,31 @@ fi
 # Change to script directory
 cd "$SCRIPT_DIR"
 
+# --- Ensure Docker daemon DNS config exists ---
+# Prevents container DNS failures caused by systemd-resolved instability
+# during docker compose restarts (iptables changes destabilize the stub resolver)
+DAEMON_JSON="/etc/docker/daemon.json"
+NEEDS_DOCKER_RESTART=false
+
+if [ ! -f "$DAEMON_JSON" ]; then
+    echo "=== Creating Docker daemon DNS config ==="
+    cat > "$DAEMON_JSON" <<'DNSJSON'
+{
+  "dns": ["8.8.8.8", "8.8.4.4"]
+}
+DNSJSON
+    NEEDS_DOCKER_RESTART=true
+elif ! grep -q '"dns"' "$DAEMON_JSON" 2>/dev/null; then
+    echo "=== WARNING: $DAEMON_JSON exists but has no dns config ==="
+    echo "    Add manually: \"dns\": [\"8.8.8.8\", \"8.8.4.4\"]"
+fi
+
+if [ "$NEEDS_DOCKER_RESTART" = true ]; then
+    echo "=== Restarting Docker daemon for DNS config ==="
+    systemctl restart docker
+    sleep 3
+fi
+
 echo "=== Stopping containers ==="
 docker compose down
 
@@ -29,6 +54,7 @@ echo "=== Rebuilding ==="
 docker compose up --build -d
 
 echo "=== Waiting for PostgreSQL ==="
+MAX_WAIT=60
 WAITED=0
 until docker exec moltbot-postgres pg_isready -U moltbot > /dev/null 2>&1; do
     if [ $WAITED -ge $MAX_WAIT ]; then
@@ -41,17 +67,8 @@ until docker exec moltbot-postgres pg_isready -U moltbot > /dev/null 2>&1; do
 done
 echo "PostgreSQL healthy after ${WAITED}s"
 
-echo "=== Running database migration (idempotent) ==="
-# Source DATABASE_URL from .env if available
-ENV_FILE="$SCRIPT_DIR/.env"
-if [ -f "$ENV_FILE" ]; then
-    DATABASE_URL=$(grep -E '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)
-    [ -n "$DATABASE_URL" ] && export DATABASE_URL
-fi
-python3 "$SCRIPT_DIR/scripts/migrate_sqlite_to_pg.py" || echo "Warning: migration script failed (non-fatal)"
-
 echo "=== Waiting for MCP server ==="
-MAX_WAIT=30
+MAX_WAIT=60
 WAITED=0
 until curl -sf http://localhost:8080/health > /dev/null 2>&1; do
     if [ $WAITED -ge $MAX_WAIT ]; then

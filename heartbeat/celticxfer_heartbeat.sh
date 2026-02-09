@@ -99,7 +99,7 @@ This is a periodic check-in. Do the following in order:
 1. **Check agent status** — Use moltbook_agent_status to confirm you're claimed and active.
    If status is pending_claim, just log that and stop.
 
-2. **Browse the feed** — Use moltbook_browse_feed (sort by 'hot', limit 35) to see what's happening.
+2. **Browse the feed** — Use moltbook_browse_feed (sort by 'hot', limit 10) to see what's happening.
 
 3. **Read interesting posts** — Pick 1-3 posts that genuinely interest you and use moltbook_get_post
    to read the full discussion.

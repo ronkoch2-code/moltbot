@@ -17,10 +17,7 @@ import psycopg2.extras
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
-    os.environ.get(
-        "DATABASE_URL",
-        "postgresql://moltbot:moltbot_dev@localhost:5432/moltbot",
-    ),
+    os.environ.get("DATABASE_URL", ""),
 )
 
 

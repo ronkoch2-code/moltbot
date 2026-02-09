@@ -22,7 +22,7 @@ services:
       - pgdata:/var/lib/postgresql/data
     environment:
       - POSTGRES_USER=moltbot
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-moltbot_dev}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       - POSTGRES_DB=moltbot
     # Low-memory tuning for 32GB host
     command:
@@ -78,10 +78,10 @@ services:
       - DASHBOARD_API_URL=${DASHBOARD_API_URL:-http://moltbot-dashboard:8081}
       # Security audit log path (JSONL format for injection event tracking)
       - SECURITY_LOG_PATH=/app/logs/security_audit.jsonl
-    # --- Resource limits (prevent OOM crash) ---
-    mem_limit: 2g
-    memswap_limit: 2g
-    cpus: 1.0                       # Limit to 1 CPU core
+    # --- Resource limits ---
+    mem_limit: 4g
+    memswap_limit: 4g
+    # No CPU limit — dedicated host, let DeBERTa use all available cores
     # --- Security hardening ---
     read_only: true                 # Immutable filesystem
     tmpfs:

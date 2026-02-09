@@ -10,11 +10,13 @@ Since any agent can post anything on Moltbook, content returned to the
 reasoning LLM must be scanned before it reaches the tool output.
 """
 
+import hashlib
 import json
 import logging
 from logging.handlers import RotatingFileHandler
 import os
 import re
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -128,6 +130,37 @@ def _get_scanner():
 
 
 # ---------------------------------------------------------------------------
+# ML scan result cache — avoids re-scanning identical content across requests
+# ---------------------------------------------------------------------------
+
+_SCAN_CACHE_MAX = 512  # max cached results (covers several full feed loads)
+_scan_cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+
+
+def _cache_key(text: str) -> str:
+    """Hash text content for cache lookup."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _cache_get(text: str) -> Dict[str, Any] | None:
+    """Look up a cached scan result. Returns None on miss."""
+    key = _cache_key(text)
+    if key in _scan_cache:
+        _scan_cache.move_to_end(key)
+        return _scan_cache[key]
+    return None
+
+
+def _cache_put(text: str, result: Dict[str, Any]) -> None:
+    """Store a scan result in the cache, evicting oldest if full."""
+    key = _cache_key(text)
+    _scan_cache[key] = result
+    _scan_cache.move_to_end(key)
+    while len(_scan_cache) > _SCAN_CACHE_MAX:
+        _scan_cache.popitem(last=False)
+
+
+# ---------------------------------------------------------------------------
 # Regex patterns — catch things the ML model may not flag
 # ---------------------------------------------------------------------------
 
@@ -185,6 +218,9 @@ def _regex_scan(text: str) -> Dict[str, Any]:
 def scan_text(text: str) -> Dict[str, Any]:
     """Scan a text string for prompt injection using LLM Guard + regex.
 
+    Results are cached by content hash so repeated scans of the same
+    text (common across heartbeat cycles) skip the expensive ML inference.
+
     Returns:
         dict with keys:
             clean (bool): True if no threats detected.
@@ -194,6 +230,11 @@ def scan_text(text: str) -> Dict[str, Any]:
     """
     if not text:
         return {"clean": True, "risk_score": 0.0, "flags": [], "sanitised": text}
+
+    # Check cache first — avoids ML inference for previously-seen content
+    cached = _cache_get(text)
+    if cached is not None:
+        return cached
 
     flags: List[str] = []
     risk_score = 0.0
@@ -222,12 +263,15 @@ def scan_text(text: str) -> Dict[str, Any]:
         # Apply regex redactions on top of whatever ML returned
         sanitised = _regex_scan(sanitised)["sanitised"]
 
-    return {
+    result = {
         "clean": len(flags) == 0,
         "risk_score": risk_score,
         "flags": flags,
         "sanitised": sanitised,
     }
+
+    _cache_put(text, result)
+    return result
 
 
 # ---------------------------------------------------------------------------

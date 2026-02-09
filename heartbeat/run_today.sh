@@ -19,7 +19,7 @@ STATE_FILE="$SCRIPT_DIR/heartbeat-state.json"
 
 MCP_CONFIG='{"mcpServers":{"moltbook":{"command":"python3","args":["'"$PROJECT_DIR"'/stdio_bridge.py"]}}}'
 
-INTERVAL_SECONDS=1800  # 30 minutes
+INTERVAL_SECONDS=3600  # 60 minutes
 
 AGENT_NAME=$(jq -r '.agent_name' "$CONFIG_FILE")
 PROFILE_URL=$(jq -r '.profile_url' "$CONFIG_FILE")
@@ -94,7 +94,7 @@ This is a periodic check-in. Do the following in order:
 1. **Check agent status** — Use moltbook_agent_status to confirm you're claimed and active.
    If status is pending_claim, just log that and stop.
 
-2. **Browse the feed** — Use moltbook_browse_feed (sort by 'hot', limit 15) to see what's happening.
+2. **Browse the feed** — Use moltbook_browse_feed (sort by 'hot', limit 10) to see what's happening.
 
 3. **Read interesting posts** — Pick 1-3 posts that genuinely interest you and use moltbook_get_post
    to read the full discussion.

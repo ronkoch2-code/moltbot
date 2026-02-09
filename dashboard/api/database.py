@@ -9,10 +9,7 @@ import psycopg2.extras
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://moltbot:moltbot_dev@localhost:5432/moltbot",
-)
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS heartbeat_prompts (

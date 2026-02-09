@@ -32,7 +32,7 @@ USER moltbot
 # Streamable HTTP transport
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD python -c "from urllib.request import urlopen; urlopen('http://localhost:8080/health', timeout=5).read()" || exit 1
+    CMD PYTHONDONTWRITEBYTECODE=1 python -c "from urllib.request import urlopen; urlopen('http://localhost:8080/health', timeout=5).read()" || exit 1
 
 ENTRYPOINT ["python", "server.py"]
 CMD ["--transport", "streamable_http", "--port", "8080"]
