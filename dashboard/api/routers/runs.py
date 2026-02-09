@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 
 def _row_to_run(row, action_count: int = 0) -> dict:
-    """Convert a sqlite3.Row to a RunOut-compatible dict."""
+    """Convert a database row to a RunOut-compatible dict."""
     return {
         "id": row["id"],
         "run_id": row["run_id"],
@@ -34,7 +34,7 @@ def _row_to_run(row, action_count: int = 0) -> dict:
         "error_message": row["error_message"],
         "action_count": action_count,
         "prompt_version_id": row["prompt_version_id"],
-        "created_at": row["created_at"],
+        "created_at": str(row["created_at"]),
     }
 
 
@@ -53,41 +53,43 @@ def list_runs(
     params = []
 
     if status:
-        conditions.append("r.status = ?")
+        conditions.append("r.status = %s")
         params.append(status)
     if agent_name:
-        conditions.append("r.agent_name = ?")
+        conditions.append("r.agent_name = %s")
         params.append(agent_name)
     if search:
-        conditions.append("(r.summary LIKE ? OR r.raw_output LIKE ?)")
+        conditions.append("(r.summary LIKE %s OR r.raw_output LIKE %s)")
         params.extend([f"%{search}%", f"%{search}%"])
     if date_from:
-        conditions.append("r.started_at >= ?")
+        conditions.append("r.started_at >= %s")
         params.append(date_from)
     if date_to:
-        conditions.append("r.started_at <= ?")
+        conditions.append("r.started_at <= %s")
         params.append(date_to)
 
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
     with get_db() as conn:
-        total_row = conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             f"SELECT COUNT(*) as total FROM heartbeat_runs r {where}", params
-        ).fetchone()
-        total = total_row["total"]
+        )
+        total = cur.fetchone()["total"]
 
         offset = (page - 1) * per_page
-        rows = conn.execute(
+        cur.execute(
             f"""
             SELECT r.*,
                    (SELECT COUNT(*) FROM heartbeat_actions a WHERE a.run_id = r.run_id) as action_count
             FROM heartbeat_runs r
             {where}
             ORDER BY r.started_at DESC
-            LIMIT ? OFFSET ?
+            LIMIT %s OFFSET %s
             """,
             [*params, per_page, offset],
-        ).fetchall()
+        )
+        rows = cur.fetchall()
 
     runs = []
     for row in rows:
@@ -107,11 +109,13 @@ def list_runs(
 def create_run(body: RunCreateIn):
     """Record a new heartbeat run."""
     with get_db() as conn:
-        conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
             INSERT INTO heartbeat_runs
                 (run_id, started_at, agent_name, script_variant, run_number, raw_output, status)
-            VALUES (?, ?, ?, ?, ?, ?, 'running')
+            VALUES (%s, %s, %s, %s, %s, %s, 'running')
+            RETURNING *
             """,
             (
                 body.run_id,
@@ -122,11 +126,8 @@ def create_run(body: RunCreateIn):
                 body.raw_output,
             ),
         )
+        row = cur.fetchone()
         conn.commit()
-
-        row = conn.execute(
-            "SELECT * FROM heartbeat_runs WHERE run_id = ?", (body.run_id,)
-        ).fetchone()
 
     return RunOut(**_row_to_run(row))
 
@@ -135,16 +136,19 @@ def create_run(body: RunCreateIn):
 def get_run(run_id: str):
     """Get a single run with its actions."""
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM heartbeat_runs WHERE run_id = ?", (run_id,)
-        ).fetchone()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM heartbeat_runs WHERE run_id = %s", (run_id,)
+        )
+        row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        action_rows = conn.execute(
-            "SELECT * FROM heartbeat_actions WHERE run_id = ? ORDER BY id",
+        cur.execute(
+            "SELECT * FROM heartbeat_actions WHERE run_id = %s ORDER BY id",
             (run_id,),
-        ).fetchall()
+        )
+        action_rows = cur.fetchall()
 
     actions = [
         ActionOut(
@@ -156,7 +160,7 @@ def get_run(run_id: str):
             target_author=a["target_author"],
             detail=a["detail"],
             succeeded=bool(a["succeeded"]),
-            created_at=a["created_at"],
+            created_at=str(a["created_at"]),
         )
         for a in action_rows
     ]
@@ -172,9 +176,11 @@ def get_run(run_id: str):
 def update_run(run_id: str, body: RunUpdateIn):
     """Update a run (set finished, status, summary, etc.)."""
     with get_db() as conn:
-        existing = conn.execute(
-            "SELECT * FROM heartbeat_runs WHERE run_id = ?", (run_id,)
-        ).fetchone()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM heartbeat_runs WHERE run_id = %s", (run_id,)
+        )
+        existing = cur.fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Run not found")
 
@@ -184,23 +190,25 @@ def update_run(run_id: str, body: RunUpdateIn):
                        "summary", "error_message", "raw_output"]:
             value = getattr(body, field, None)
             if value is not None:
-                updates.append(f"{field} = ?")
+                updates.append(f"{field} = %s")
                 params.append(value)
 
         if updates:
             params.append(run_id)
-            conn.execute(
-                f"UPDATE heartbeat_runs SET {', '.join(updates)} WHERE run_id = ?",
+            cur.execute(
+                f"UPDATE heartbeat_runs SET {', '.join(updates)} WHERE run_id = %s",
                 params,
             )
             conn.commit()
 
-        row = conn.execute(
-            "SELECT * FROM heartbeat_runs WHERE run_id = ?", (run_id,)
-        ).fetchone()
-        action_count = conn.execute(
-            "SELECT COUNT(*) as cnt FROM heartbeat_actions WHERE run_id = ?",
+        cur.execute(
+            "SELECT * FROM heartbeat_runs WHERE run_id = %s", (run_id,)
+        )
+        row = cur.fetchone()
+        cur.execute(
+            "SELECT COUNT(*) as cnt FROM heartbeat_actions WHERE run_id = %s",
             (run_id,),
-        ).fetchone()["cnt"]
+        )
+        action_count = cur.fetchone()["cnt"]
 
     return RunOut(**_row_to_run(row, action_count=action_count))

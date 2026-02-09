@@ -29,6 +29,8 @@ Claude/AI  →  MCP Server (Docker, localhost:8080)  →  moltbook.com API
 | `requirements-dev.txt` | Dev/test dependencies |
 | `dashboard/` | Heartbeat activity dashboard (FastAPI + React) |
 | `heartbeat/record_activity.py` | Structured activity recorder |
+| `heartbeat/collect_mcp_logs.py` | MCP log collector + oddity detector |
+| `dashboard/api/routers/security.py` | Security analytics API endpoints |
 | `.pre-commit-config.yaml` | Pre-commit hook configuration |
 | `.secrets.baseline` | detect-secrets baseline for token scanning |
 
@@ -40,6 +42,8 @@ Claude/AI  →  MCP Server (Docker, localhost:8080)  →  moltbook.com API
 - **uvicorn** — ASGI server (streamable HTTP transport)
 - **Pydantic v2** — input validation with strict models
 - **llm-guard** — ML-based prompt injection detection (DeBERTa v3)
+- **PostgreSQL 16** — database (Docker named volume, psycopg2 driver)
+- **FastAPI** — dashboard REST API
 
 ## Code Conventions
 
@@ -79,6 +83,8 @@ curl http://localhost:8080/health
 | `MOLTBOOK_AGENT_NAME` | `unknown` | Agent display name |
 | `CONTENT_FILTER_THRESHOLD` | `0.5` | ML injection detection threshold (0.0-1.0, lower = more aggressive) |
 | `LOG_LEVEL` | `INFO` | Logging verbosity (DEBUG, INFO, WARNING, ERROR) |
+| `POSTGRES_PASSWORD` | `moltbot_dev` | PostgreSQL password (used by docker-compose) |
+| `DATABASE_URL` | — | PostgreSQL connection URL for host-side scripts |
 
 ## Tools (10)
 
@@ -240,36 +246,39 @@ The dashboard monitors CelticXfer's automated heartbeat activity on Moltbook.
 ### Architecture
 
 ```
-Heartbeat scripts → record_activity.py → SQLite (data/heartbeat.db)
-Dashboard API (FastAPI :8081) → SQLite → React webapp (static files)
+Heartbeat scripts → record_activity.py → PostgreSQL (Docker named volume)
+Dashboard API (FastAPI :8081) → PostgreSQL → React webapp (static files)
 ```
+
+All database clients connect to PostgreSQL via TCP (`DATABASE_URL` env var). The database runs in a Docker container with a named volume (`pgdata`) — no database files touch SMB mounts.
 
 ### Key Dashboard Files
 
 | File | Purpose |
 |------|---------|
 | `dashboard/api/main.py` | FastAPI app, static file serving, CORS |
-| `dashboard/api/database.py` | SQLite connection, schema init, WAL mode |
+| `dashboard/api/database.py` | PostgreSQL connection (psycopg2), schema init |
 | `dashboard/api/models.py` | Pydantic response models |
 | `dashboard/api/routers/runs.py` | Run CRUD endpoints |
 | `dashboard/api/routers/actions.py` | Action endpoints |
 | `dashboard/api/routers/stats.py` | Aggregate statistics |
 | `dashboard/webapp/` | React 19 + TypeScript + Tailwind CSS 4 |
 | `dashboard/Dockerfile` | Multi-stage build (Node + Python) |
-| `heartbeat/record_activity.py` | Parses Claude output, writes to SQLite |
+| `heartbeat/record_activity.py` | Parses Claude output, writes to PostgreSQL |
 | `heartbeat/backfill_from_log.py` | One-time migration from heartbeat.log |
+| `scripts/migrate_sqlite_to_pg.py` | One-time SQLite → PostgreSQL data migration |
 
 ### Running the Dashboard
 
 ```bash
-# Build and start (with MCP server)
+# Build and start (PostgreSQL + MCP + Dashboard)
 docker compose up --build -d
 
 # Dashboard accessible at
 curl http://localhost:8081/api/health
 
-# Backfill historical data from logs
-python3 heartbeat/backfill_from_log.py
+# One-time data migration from SQLite (if applicable)
+python3 scripts/migrate_sqlite_to_pg.py
 ```
 
 ### Dashboard API Endpoints
@@ -285,6 +294,47 @@ python3 heartbeat/backfill_from_log.py
 | `/api/actions` | GET | All actions (filterable) |
 | `/api/stats` | GET | Aggregate stats |
 | `/api/stats/timeline` | GET | Daily counts for charting |
+
+## Security Analytics
+
+Tracks MCP server security events, tool call patterns, and behavioral oddities.
+
+### Architecture
+
+```
+MCP container → docker logs → collect_mcp_logs.py (host) → PostgreSQL
+content_filter.py → data/logs/security_audit.jsonl → collect_mcp_logs.py → PostgreSQL
+Dashboard API /api/security/* → React /security page
+```
+
+### Collection
+
+`heartbeat/collect_mcp_logs.py` runs after each heartbeat and:
+1. Reads structured JSONL from `data/logs/security_audit.jsonl` (injection events)
+2. Parses `docker logs` for auth warnings and HTTP request patterns
+3. Inserts events into 3 PostgreSQL tables: `security_events`, `tool_calls`, `behavior_oddities`
+4. Detects oddities: duplicate votes, failed API calls (4xx/5xx), excessive call rates
+
+### Security API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/security/events` | GET | List security events (paginated, filterable) |
+| `/api/security/events/{id}` | GET | Single event detail |
+| `/api/security/tool-calls` | GET | List tool calls (paginated, filterable) |
+| `/api/security/oddities` | GET | List oddities (paginated, filterable) |
+| `/api/security/stats` | GET | Aggregate statistics |
+| `/api/security/timeline` | GET | Daily event counts for charting |
+
+### Manual Collection
+
+```bash
+# Collect logs and detect oddities
+python3 heartbeat/collect_mcp_logs.py --detect-oddities
+
+# Specify custom container/database
+python3 heartbeat/collect_mcp_logs.py --container moltbook-mcp-server --database-url postgresql://moltbot:pass@localhost:5432/moltbot
+```
 
 ## Code Quality and Pre-commit Hooks
 

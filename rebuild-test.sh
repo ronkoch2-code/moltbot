@@ -28,6 +28,28 @@ docker compose down
 echo "=== Rebuilding ==="
 docker compose up --build -d
 
+echo "=== Waiting for PostgreSQL ==="
+WAITED=0
+until docker exec moltbot-postgres pg_isready -U moltbot > /dev/null 2>&1; do
+    if [ $WAITED -ge $MAX_WAIT ]; then
+        echo "Error: PostgreSQL did not become healthy within ${MAX_WAIT}s"
+        docker compose logs postgres --tail 20
+        exit 1
+    fi
+    sleep 2
+    WAITED=$((WAITED + 2))
+done
+echo "PostgreSQL healthy after ${WAITED}s"
+
+echo "=== Running database migration (idempotent) ==="
+# Source DATABASE_URL from .env if available
+ENV_FILE="$SCRIPT_DIR/.env"
+if [ -f "$ENV_FILE" ]; then
+    DATABASE_URL=$(grep -E '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)
+    [ -n "$DATABASE_URL" ] && export DATABASE_URL
+fi
+python3 "$SCRIPT_DIR/scripts/migrate_sqlite_to_pg.py" || echo "Warning: migration script failed (non-fatal)"
+
 echo "=== Waiting for MCP server ==="
 MAX_WAIT=30
 WAITED=0

@@ -44,6 +44,22 @@ PROFILE_URL=$(jq -r '.profile_url' "$CONFIG_FILE")
 
 echo "$(date -Iseconds) INFO: Starting heartbeat for $AGENT_NAME" >> "$LOG_FILE"
 
+# ---- Load MCP auth token from project .env -----------------------------------
+
+ENV_FILE="$PROJECT_DIR/.env"
+if [ -f "$ENV_FILE" ]; then
+    MCP_AUTH_TOKEN=$(grep -E '^MCP_AUTH_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
+    if [ -n "$MCP_AUTH_TOKEN" ]; then
+        export MCP_AUTH_TOKEN
+        echo "$(date -Iseconds) INFO: MCP auth token loaded from .env" >> "$LOG_FILE"
+    fi
+
+    DATABASE_URL=$(grep -E '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)
+    if [ -n "$DATABASE_URL" ]; then
+        export DATABASE_URL
+    fi
+fi
+
 # ---- Check remote MCP server is reachable ------------------------------------
 
 MCP_HOST="192.168.153.8"
@@ -146,7 +162,7 @@ jq -n \
     --arg result "$RESULT" \
     '{last_heartbeat: $ts, last_result: $result}' > "$STATE_FILE"
 
-# Record structured activity to SQLite dashboard
+# Record structured activity to PostgreSQL dashboard
 RUN_UUID="celticxfer-$(date +%s)"
 TMPFILE=$(mktemp)
 echo "$RESULT" > "$TMPFILE"
@@ -160,5 +176,8 @@ python3 "$SCRIPT_DIR/record_activity.py" \
     --output-file "$TMPFILE" \
     ${PROMPT_VERSION:+--prompt-version "$PROMPT_VERSION"} 2>&1 || echo "$(date -Iseconds) WARN: Activity recording failed (non-fatal)" >> "$LOG_FILE"
 rm -f "$TMPFILE"
+
+# Collect MCP server logs and detect oddities
+python3 "$SCRIPT_DIR/collect_mcp_logs.py" --detect-oddities 2>&1 || echo "$(date -Iseconds) WARN: Log collection failed (non-fatal)" >> "$LOG_FILE"
 
 echo "$(date -Iseconds) INFO: Heartbeat complete for $AGENT_NAME" >> "$LOG_FILE"

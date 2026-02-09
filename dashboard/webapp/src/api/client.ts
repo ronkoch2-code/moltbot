@@ -1,4 +1,4 @@
-import type { Stats, TimelinePoint, PaginatedRuns, RunDetail, PaginatedActions, RunFilters, PaginatedPrompts, Prompt } from '@/types';
+import type { Stats, TimelinePoint, PaginatedRuns, RunDetail, PaginatedActions, RunFilters, PaginatedPrompts, Prompt, PaginatedSecurityEvents, PaginatedToolCalls, PaginatedOddities, SecurityStats, SecurityTimelinePoint } from '@/types';
 
 const API_BASE = '/api';
 
@@ -86,4 +86,63 @@ export async function createPrompt(body: {
   author?: string;
 }): Promise<Prompt> {
   return postJSON<Prompt>(`${API_BASE}/prompts`, body);
+}
+
+export async function fetchSecurityEvents(filters: {
+  page?: number;
+  per_page?: number;
+  event_type?: string;
+  date_from?: string;
+  date_to?: string;
+  min_risk_score?: number;
+} = {}): Promise<PaginatedSecurityEvents> {
+  const params = new URLSearchParams();
+  if (filters.page) params.append('page', filters.page.toString());
+  if (filters.per_page) params.append('per_page', filters.per_page.toString());
+  if (filters.event_type) params.append('event_type', filters.event_type);
+  if (filters.date_from) params.append('date_from', filters.date_from);
+  if (filters.date_to) params.append('date_to', filters.date_to);
+  if (filters.min_risk_score !== undefined) params.append('min_risk_score', filters.min_risk_score.toString());
+  const qs = params.toString();
+  return fetchJSON<PaginatedSecurityEvents>(qs ? `${API_BASE}/security/events?${qs}` : `${API_BASE}/security/events`);
+}
+
+export async function fetchSecurityStats(): Promise<SecurityStats> {
+  return fetchJSON<SecurityStats>(`${API_BASE}/security/stats`);
+}
+
+export async function fetchToolCalls(filters: {
+  page?: number;
+  per_page?: number;
+  tool_name?: string;
+  date_from?: string;
+  date_to?: string;
+} = {}): Promise<PaginatedToolCalls> {
+  const params = new URLSearchParams();
+  if (filters.page) params.append('page', filters.page.toString());
+  if (filters.per_page) params.append('per_page', filters.per_page.toString());
+  if (filters.tool_name) params.append('tool_name', filters.tool_name);
+  if (filters.date_from) params.append('date_from', filters.date_from);
+  if (filters.date_to) params.append('date_to', filters.date_to);
+  const qs = params.toString();
+  return fetchJSON<PaginatedToolCalls>(qs ? `${API_BASE}/security/tool-calls?${qs}` : `${API_BASE}/security/tool-calls`);
+}
+
+export async function fetchOddities(filters: {
+  page?: number;
+  per_page?: number;
+  oddity_type?: string;
+  severity?: string;
+} = {}): Promise<PaginatedOddities> {
+  const params = new URLSearchParams();
+  if (filters.page) params.append('page', filters.page.toString());
+  if (filters.per_page) params.append('per_page', filters.per_page.toString());
+  if (filters.oddity_type) params.append('oddity_type', filters.oddity_type);
+  if (filters.severity) params.append('severity', filters.severity);
+  const qs = params.toString();
+  return fetchJSON<PaginatedOddities>(qs ? `${API_BASE}/security/oddities?${qs}` : `${API_BASE}/security/oddities`);
+}
+
+export async function fetchSecurityTimeline(days: number = 30): Promise<SecurityTimelinePoint[]> {
+  return fetchJSON<SecurityTimelinePoint[]>(`${API_BASE}/security/timeline?days=${days}`);
 }

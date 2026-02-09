@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/prompts", tags=["prompts"])
 
 
 def _row_to_prompt(row) -> dict:
-    """Convert a sqlite3.Row to a PromptOut-compatible dict."""
+    """Convert a database row to a PromptOut-compatible dict."""
     return {
         "id": row["id"],
         "version": row["version"],
@@ -20,7 +20,7 @@ def _row_to_prompt(row) -> dict:
         "change_summary": row["change_summary"],
         "author": row["author"],
         "is_active": bool(row["is_active"]),
-        "created_at": row["created_at"],
+        "created_at": str(row["created_at"]),
     }
 
 
@@ -31,20 +31,22 @@ def list_prompts(
 ):
     """List all prompt versions, newest first."""
     with get_db() as conn:
-        total_row = conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             "SELECT COUNT(*) as total FROM heartbeat_prompts"
-        ).fetchone()
-        total = total_row["total"]
+        )
+        total = cur.fetchone()["total"]
 
         offset = (page - 1) * per_page
-        rows = conn.execute(
+        cur.execute(
             """
             SELECT * FROM heartbeat_prompts
             ORDER BY version DESC
-            LIMIT ? OFFSET ?
+            LIMIT %s OFFSET %s
             """,
             (per_page, offset),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
 
     prompts = [PromptOut(**_row_to_prompt(row)) for row in rows]
     return PaginatedPrompts(
@@ -60,9 +62,11 @@ def list_prompts(
 def get_active_prompt():
     """Get the currently active prompt."""
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM heartbeat_prompts WHERE is_active = 1"
-        ).fetchone()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM heartbeat_prompts WHERE is_active = TRUE"
+        )
+        row = cur.fetchone()
 
     if not row:
         raise HTTPException(status_code=404, detail="No active prompt")
@@ -73,9 +77,11 @@ def get_active_prompt():
 def get_active_prompt_text():
     """Get the active prompt as plain text (for shell script curl)."""
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT prompt_text FROM heartbeat_prompts WHERE is_active = 1"
-        ).fetchone()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT prompt_text FROM heartbeat_prompts WHERE is_active = TRUE"
+        )
+        row = cur.fetchone()
 
     if not row:
         raise HTTPException(status_code=404, detail="No active prompt")
@@ -86,9 +92,11 @@ def get_active_prompt_text():
 def get_prompt(prompt_id: int):
     """Get a specific prompt version by ID."""
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM heartbeat_prompts WHERE id = ?", (prompt_id,)
-        ).fetchone()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM heartbeat_prompts WHERE id = %s", (prompt_id,)
+        )
+        row = cur.fetchone()
 
     if not row:
         raise HTTPException(status_code=404, detail="Prompt not found")
@@ -99,28 +107,27 @@ def get_prompt(prompt_id: int):
 def create_prompt(body: PromptCreateIn):
     """Create a new prompt version. Deactivates all previous versions."""
     with get_db() as conn:
+        cur = conn.cursor()
         # Get the next version number
-        max_row = conn.execute(
+        cur.execute(
             "SELECT COALESCE(MAX(version), 0) as max_ver FROM heartbeat_prompts"
-        ).fetchone()
-        next_version = max_row["max_ver"] + 1
+        )
+        next_version = cur.fetchone()["max_ver"] + 1
 
         # Deactivate all existing prompts
-        conn.execute("UPDATE heartbeat_prompts SET is_active = 0")
+        cur.execute("UPDATE heartbeat_prompts SET is_active = FALSE")
 
         # Insert new active prompt
-        cursor = conn.execute(
+        cur.execute(
             """
             INSERT INTO heartbeat_prompts
                 (version, prompt_text, change_summary, author, is_active)
-            VALUES (?, ?, ?, ?, 1)
+            VALUES (%s, %s, %s, %s, TRUE)
+            RETURNING *
             """,
             (next_version, body.prompt_text, body.change_summary, body.author),
         )
+        row = cur.fetchone()
         conn.commit()
-
-        row = conn.execute(
-            "SELECT * FROM heartbeat_prompts WHERE id = ?", (cursor.lastrowid,)
-        ).fetchone()
 
     return PromptOut(**_row_to_prompt(row))

@@ -98,3 +98,88 @@ export interface PaginatedPrompts {
   per_page: number;
   total_pages: number;
 }
+
+export interface SecurityEvent {
+  id: number;
+  event_type: 'injection_attempt' | 'unauthorized_access' | 'suspicious_pattern';
+  timestamp: string;
+  source_ip: string | null;
+  post_id: string | null;
+  author_name: string | null;
+  submolt_name: string | null;
+  risk_score: number | null;
+  flags: string | null;
+  fields_affected: string | null;
+  target_path: string | null;
+  raw_log_line: string | null;
+  created_at: string;
+}
+
+export interface PaginatedSecurityEvents {
+  events: SecurityEvent[];
+  total: number;
+  page: number;
+  per_page: number;
+  total_pages: number;
+}
+
+export interface ToolCall {
+  id: number;
+  timestamp: string;
+  tool_name: string | null;
+  target_id: string | null;
+  target_type: string | null;
+  direction: string | null;
+  http_method: string | null;
+  http_url: string | null;
+  http_status: number | null;
+  raw_log_line: string | null;
+  created_at: string;
+}
+
+export interface PaginatedToolCalls {
+  tool_calls: ToolCall[];
+  total: number;
+  page: number;
+  per_page: number;
+  total_pages: number;
+}
+
+export interface Oddity {
+  id: number;
+  oddity_type: 'duplicate_vote' | 'failed_api_call' | 'excessive_calls';
+  description: string;
+  severity: 'info' | 'warning' | 'critical';
+  related_tool_call_ids: string | null;
+  detected_at: string;
+  created_at: string;
+}
+
+export interface PaginatedOddities {
+  oddities: Oddity[];
+  total: number;
+  page: number;
+  per_page: number;
+  total_pages: number;
+}
+
+export interface SecurityStats {
+  total_events: number;
+  injection_attempts: number;
+  unauthorized_access: number;
+  suspicious_patterns: number;
+  avg_risk_score: number | null;
+  max_risk_score: number | null;
+  top_flagged_authors: { author: string; count: number }[];
+  tool_call_breakdown: { tool: string; count: number }[];
+  total_oddities: number;
+  critical_oddities: number;
+}
+
+export interface SecurityTimelinePoint {
+  date: string;
+  injections: number;
+  auth_failures: number;
+  suspicious: number;
+  total: number;
+}

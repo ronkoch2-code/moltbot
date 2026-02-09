@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Backfill heartbeat.db from existing heartbeat.log.
+"""Backfill PostgreSQL from existing heartbeat.log.
 
-One-time migration script that parses the flat log file and populates SQLite
-with historical runs. Safe to re-run — uses INSERT OR IGNORE.
+One-time migration script that parses the flat log file and populates
+PostgreSQL with historical runs. Safe to re-run — uses ON CONFLICT DO NOTHING.
 
 Usage:
-    python heartbeat/backfill_from_log.py
-    python heartbeat/backfill_from_log.py --log-file /path/to/heartbeat.log
+    python3 heartbeat/backfill_from_log.py
+    python3 heartbeat/backfill_from_log.py --log-file /path/to/heartbeat.log
 """
 
 import argparse
@@ -18,7 +18,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from dashboard.api.database import DB_PATH, get_connection, init_db
+from dashboard.api.database import DATABASE_URL, get_connection, init_db
 from heartbeat.record_activity import extract_actions, extract_summary
 
 LOG_FILE = Path(__file__).resolve().parent / "heartbeat.log"
@@ -123,44 +123,46 @@ def parse_log_file(log_path: Path) -> list[dict]:
     return runs
 
 
-def backfill(log_path: Path, db_path: str) -> int:
+def backfill(log_path: Path, database_url: str) -> int:
     """Backfill the database from the log file.
 
     Parameters
     ----------
     log_path : Path
         Path to heartbeat.log.
-    db_path : str
-        Path to the SQLite database.
+    database_url : str
+        PostgreSQL connection URL.
 
     Returns
     -------
     int
         Number of runs inserted.
     """
-    init_db(db_path)
+    init_db(database_url)
     runs = parse_log_file(log_path)
 
     if not runs:
         print("No heartbeat entries found in log.", file=sys.stderr)
         return 0
 
-    conn = get_connection(db_path)
+    conn = get_connection(database_url)
     inserted = 0
 
     try:
+        cur = conn.cursor()
         for run in runs:
             summary = extract_summary(run["raw_output"])
             actions = extract_actions(run["raw_output"])
 
             try:
-                conn.execute(
+                cur.execute(
                     """
-                    INSERT OR IGNORE INTO heartbeat_runs
+                    INSERT INTO heartbeat_runs
                         (run_id, started_at, finished_at, duration_seconds,
                          exit_code, status, agent_name, script_variant,
                          run_number, raw_output, summary, error_message)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (run_id) DO NOTHING
                     """,
                     (
                         run["run_id"],
@@ -178,14 +180,15 @@ def backfill(log_path: Path, db_path: str) -> int:
                     ),
                 )
 
-                if conn.total_changes > 0:
+                # Check if the row was actually inserted
+                if cur.rowcount > 0:
                     for action in actions:
-                        conn.execute(
+                        cur.execute(
                             """
                             INSERT INTO heartbeat_actions
                                 (run_id, action_type, target_id, target_title,
                                  target_author, detail, succeeded)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
                             """,
                             (
                                 run["run_id"],
@@ -194,7 +197,7 @@ def backfill(log_path: Path, db_path: str) -> int:
                                 action.get("target_title"),
                                 action.get("target_author"),
                                 action.get("detail"),
-                                1 if action.get("succeeded", True) else 0,
+                                action.get("succeeded", True),
                             ),
                         )
                     inserted += 1
@@ -204,6 +207,7 @@ def backfill(log_path: Path, db_path: str) -> int:
                     f"Warning: Failed to insert run {run['run_id']}: {e}",
                     file=sys.stderr,
                 )
+                conn.rollback()
 
         conn.commit()
     finally:
@@ -215,7 +219,7 @@ def backfill(log_path: Path, db_path: str) -> int:
 def main() -> None:
     """CLI entry point for backfilling from heartbeat.log."""
     parser = argparse.ArgumentParser(
-        description="Backfill heartbeat.db from heartbeat.log"
+        description="Backfill PostgreSQL from heartbeat.log"
     )
     parser.add_argument(
         "--log-file",
@@ -224,25 +228,24 @@ def main() -> None:
         help=f"Path to heartbeat.log (default: {LOG_FILE})",
     )
     parser.add_argument(
-        "--db-path",
-        default=DB_PATH,
-        help=f"Database path (default: {DB_PATH})",
+        "--database-url",
+        default=DATABASE_URL,
+        help="Database URL (default: from DATABASE_URL env var)",
     )
     args = parser.parse_args()
 
-    print(f"Backfilling from {args.log_file} to {args.db_path}")
-    count = backfill(args.log_file, args.db_path)
+    print(f"Backfilling from {args.log_file} to PostgreSQL")
+    count = backfill(args.log_file, args.database_url)
     print(f"Inserted {count} runs.")
 
     # Print quick summary
-    conn = get_connection(args.db_path)
+    conn = get_connection(args.database_url)
     try:
-        row = conn.execute(
-            "SELECT COUNT(*) as runs FROM heartbeat_runs"
-        ).fetchone()
-        actions_row = conn.execute(
-            "SELECT COUNT(*) as actions FROM heartbeat_actions"
-        ).fetchone()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) as runs FROM heartbeat_runs")
+        row = cur.fetchone()
+        cur.execute("SELECT COUNT(*) as actions FROM heartbeat_actions")
+        actions_row = cur.fetchone()
         print(f"Database now has {row['runs']} runs and {actions_row['actions']} actions.")
     finally:
         conn.close()

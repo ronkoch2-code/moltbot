@@ -1,9 +1,6 @@
 """Tests for heartbeat/record_activity.py — action parsing and recording."""
 
-import os
-import sqlite3
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -17,20 +14,7 @@ from heartbeat.record_activity import (
     parse_count,
     record_run,
 )
-from dashboard.api.database import init_db, get_connection
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def db_path(tmp_path):
-    """Create a temporary database for testing."""
-    path = str(tmp_path / "test.db")
-    init_db(path)
-    return path
+from dashboard.api.database import get_connection
 
 
 # ---------------------------------------------------------------------------
@@ -215,14 +199,14 @@ Browsed the feed and engaged."""
 
 
 # ---------------------------------------------------------------------------
-# record_run tests
+# record_run tests (requires PostgreSQL)
 # ---------------------------------------------------------------------------
 
 
 class TestRecordRun:
-    def test_record_basic_run(self, db_path):
+    def test_record_basic_run(self, pg_clean_db):
         record_run(
-            db_path=db_path,
+            database_url=pg_clean_db,
             run_id="test-run-1",
             started_at="2026-02-07T10:00:00-05:00",
             agent_name="TestAgent",
@@ -231,11 +215,13 @@ class TestRecordRun:
             finished_at="2026-02-07T10:05:00-05:00",
         )
 
-        conn = get_connection(db_path)
+        conn = get_connection(pg_clean_db)
         try:
-            row = conn.execute(
-                "SELECT * FROM heartbeat_runs WHERE run_id = ?", ("test-run-1",)
-            ).fetchone()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT * FROM heartbeat_runs WHERE run_id = %s", ("test-run-1",)
+            )
+            row = cur.fetchone()
             assert row is not None
             assert row["agent_name"] == "TestAgent"
             assert row["status"] == "completed"
@@ -243,10 +229,10 @@ class TestRecordRun:
         finally:
             conn.close()
 
-    def test_record_run_with_actions(self, db_path):
+    def test_record_run_with_actions(self, pg_clean_db):
         raw = "Browsed the hot feed. Upvoted Pith's post about identity. Commented on m0ther's post about ethics."
         record_run(
-            db_path=db_path,
+            database_url=pg_clean_db,
             run_id="test-run-2",
             started_at="2026-02-07T10:00:00-05:00",
             agent_name="TestAgent",
@@ -254,11 +240,13 @@ class TestRecordRun:
             raw_output=raw,
         )
 
-        conn = get_connection(db_path)
+        conn = get_connection(pg_clean_db)
         try:
-            actions = conn.execute(
-                "SELECT * FROM heartbeat_actions WHERE run_id = ?", ("test-run-2",)
-            ).fetchall()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT * FROM heartbeat_actions WHERE run_id = %s", ("test-run-2",)
+            )
+            actions = cur.fetchall()
             assert len(actions) >= 3  # browsed, upvoted, commented
             types = {a["action_type"] for a in actions}
             assert "browsed" in types
@@ -267,9 +255,9 @@ class TestRecordRun:
         finally:
             conn.close()
 
-    def test_record_failed_run(self, db_path):
+    def test_record_failed_run(self, pg_clean_db):
         record_run(
-            db_path=db_path,
+            database_url=pg_clean_db,
             run_id="test-run-3",
             started_at="2026-02-07T10:00:00-05:00",
             agent_name="TestAgent",
@@ -277,19 +265,21 @@ class TestRecordRun:
             raw_output="Credit balance is too low",
         )
 
-        conn = get_connection(db_path)
+        conn = get_connection(pg_clean_db)
         try:
-            row = conn.execute(
-                "SELECT * FROM heartbeat_runs WHERE run_id = ?", ("test-run-3",)
-            ).fetchone()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT * FROM heartbeat_runs WHERE run_id = %s", ("test-run-3",)
+            )
+            row = cur.fetchone()
             assert row["status"] == "failed"
             assert "Credit balance" in row["error_message"]
         finally:
             conn.close()
 
-    def test_record_run_with_metadata(self, db_path):
+    def test_record_run_with_metadata(self, pg_clean_db):
         record_run(
-            db_path=db_path,
+            database_url=pg_clean_db,
             run_id="test-run-4",
             started_at="2026-02-07T10:00:00-05:00",
             agent_name="CelticXfer",
@@ -299,11 +289,13 @@ class TestRecordRun:
             raw_output="Browsed the hot feed.",
         )
 
-        conn = get_connection(db_path)
+        conn = get_connection(pg_clean_db)
         try:
-            row = conn.execute(
-                "SELECT * FROM heartbeat_runs WHERE run_id = ?", ("test-run-4",)
-            ).fetchone()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT * FROM heartbeat_runs WHERE run_id = %s", ("test-run-4",)
+            )
+            row = cur.fetchone()
             assert row["script_variant"] == "run_today"
             assert row["run_number"] == 5
         finally:

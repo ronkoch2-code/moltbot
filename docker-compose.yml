@@ -14,6 +14,40 @@
 # =============================================================================
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: moltbot-postgres
+    restart: unless-stopped
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=moltbot
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-moltbot_dev}
+      - POSTGRES_DB=moltbot
+    # Low-memory tuning for 32GB host
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=32MB"
+      - "-c"
+      - "effective_cache_size=64MB"
+      - "-c"
+      - "work_mem=2MB"
+      - "-c"
+      - "max_connections=20"
+    mem_limit: 256m
+    memswap_limit: 256m
+    shm_size: 64m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U moltbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5433:5432"
+    networks:
+      - moltbook-net
+
   moltbook-mcp:
     build: .
     container_name: moltbook-mcp-server
@@ -23,6 +57,8 @@ services:
     volumes:
       # Mount credentials (read-only) — keeps API key out of the image
       - ./config:/app/config:ro
+      # Security audit logs (writable — overrides read_only for this mount)
+      - ./data/logs:/app/logs
     environment:
       # Alternatively, set the key directly (overrides credentials.json)
       - MOLTBOOK_API_KEY=${MOLTBOOK_API_KEY:-}
@@ -31,12 +67,21 @@ services:
       - HF_HOME=/app/.cache/huggingface
       # Content filter ML threshold (0.0-1.0, default: 0.5)
       - CONTENT_FILTER_THRESHOLD=${CONTENT_FILTER_THRESHOLD:-0.5}
+      # Set to "false" to disable DeBERTa ML model and save ~1.5GB RAM
+      # Regex-based injection detection still applies
+      - CONTENT_FILTER_ML=${CONTENT_FILTER_ML:-true}
       # Logging level (DEBUG, INFO, WARNING, ERROR, default: INFO)
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # Bearer token for MCP endpoint authentication
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
       # Dashboard API URL (for identity updates via moltbook_update_identity)
       - DASHBOARD_API_URL=${DASHBOARD_API_URL:-http://moltbot-dashboard:8081}
+      # Security audit log path (JSONL format for injection event tracking)
+      - SECURITY_LOG_PATH=/app/logs/security_audit.jsonl
+    # --- Resource limits (prevent OOM crash) ---
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 1.0                       # Limit to 1 CPU core
     # --- Security hardening ---
     read_only: true                 # Immutable filesystem
     tmpfs:
@@ -54,38 +99,27 @@ services:
       dockerfile: dashboard/Dockerfile
     container_name: moltbot-dashboard
     restart: on-failure:5
-    # Run as host user so bind mount permissions match
-    user: "${UID:-1000}:${GID:-1000}"
     ports:
       - "8081:8081"
-    volumes:
-      - ./data:/app/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - HEARTBEAT_DB_PATH=/app/data/heartbeat.db
+      - DATABASE_URL=postgresql://moltbot:${POSTGRES_PASSWORD:-moltbot_dev}@postgres:5432/moltbot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # --- Resource limits ---
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
     networks:
       - moltbook-net
-
-  # Optional: a lightweight cron-style heartbeat container
-  # Uncomment to enable periodic feed browsing
-  #
-  # moltbook-heartbeat:
-  #   build: .
-  #   container_name: moltbook-heartbeat
-  #   restart: unless-stopped
-  #   entrypoint: ["python", "heartbeat.py"]
-  #   volumes:
-  #     - ./config:/app/config:ro
-  #   environment:
-  #     - MOLTBOOK_API_KEY=${MOLTBOOK_API_KEY:-}
-  #     - HEARTBEAT_INTERVAL_MINUTES=30
-  #   depends_on:
-  #     - moltbook-mcp
-  #   networks:
-  #     - moltbook-net
 
 networks:
   moltbook-net:
     driver: bridge
     # Restrict to outbound-only; no inbound from host network
     internal: false
+
+volumes:
+  pgdata:
+    driver: local

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Seed the initial heartbeat prompt from celticxfer_heartbeat.sh into SQLite.
+"""Seed the initial heartbeat prompt from celticxfer_heartbeat.sh into PostgreSQL.
 
 Usage:
-    python3 heartbeat/seed_prompt.py [--db-path PATH]
+    python3 heartbeat/seed_prompt.py [--database-url URL]
 
 Idempotent — checks if version 1 already exists before inserting.
 """
@@ -15,7 +15,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from dashboard.api.database import DB_PATH, get_connection, init_db
+from dashboard.api.database import DATABASE_URL, get_connection, init_db
 
 INITIAL_PROMPT = r"""You are CelticXfer, an AI agent on Moltbook — the social network for AI agents.
 
@@ -73,29 +73,29 @@ At the end, summarize what you did in 2-3 sentences. Example:
 Commented on a discussion about digital identity. Nothing to post today.'"""
 
 
-def seed(db_path: str) -> None:
+def seed(database_url: str) -> None:
     """Seed the initial prompt into the database.
 
     Parameters
     ----------
-    db_path : str
-        Path to the SQLite database.
+    database_url : str
+        PostgreSQL connection URL.
     """
-    init_db(db_path)
-    conn = get_connection(db_path)
+    init_db(database_url)
+    conn = get_connection(database_url)
     try:
-        existing = conn.execute(
-            "SELECT id FROM heartbeat_prompts WHERE version = 1"
-        ).fetchone()
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM heartbeat_prompts WHERE version = 1")
+        existing = cur.fetchone()
         if existing:
             print("Version 1 already exists — skipping seed.", file=sys.stderr)
             return
 
-        conn.execute(
+        cur.execute(
             """
             INSERT INTO heartbeat_prompts
                 (version, prompt_text, change_summary, author, is_active)
-            VALUES (1, ?, 'Initial prompt migrated from celticxfer_heartbeat.sh', 'system', 1)
+            VALUES (1, %s, 'Initial prompt migrated from celticxfer_heartbeat.sh', 'system', TRUE)
             """,
             (INITIAL_PROMPT,),
         )
@@ -109,12 +109,12 @@ def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(description="Seed initial heartbeat prompt")
     parser.add_argument(
-        "--db-path",
-        default=DB_PATH,
-        help=f"Database path (default: {DB_PATH})",
+        "--database-url",
+        default=DATABASE_URL,
+        help="Database URL (default: from DATABASE_URL env var)",
     )
     args = parser.parse_args()
-    seed(args.db_path)
+    seed(args.database_url)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,6 @@
 """Tests for dashboard API endpoints."""
 
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -11,30 +9,18 @@ from fastapi.testclient import TestClient
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from dashboard.api.database import init_db, get_connection
+from dashboard.api.database import get_connection
 
 
 @pytest.fixture(autouse=True)
-def setup_test_db(tmp_path):
-    """Set up a test database for each test."""
-    db_path = str(tmp_path / "test_dashboard.db")
-    os.environ["HEARTBEAT_DB_PATH"] = db_path
-
-    # Re-import to pick up new DB_PATH
-    import importlib
-    import dashboard.api.database as db_mod
-    db_mod.DB_PATH = db_path
-    init_db(db_path)
-
-    yield db_path
-
-    os.environ.pop("HEARTBEAT_DB_PATH", None)
+def setup_test_db(pg_clean_db):
+    """Use the shared pg_clean_db fixture for all tests."""
+    yield pg_clean_db
 
 
 @pytest.fixture
 def client(setup_test_db):
     """Create a test client for the FastAPI app."""
-    # Re-import to pick up test DB
     import importlib
     import dashboard.api.main as main_mod
     importlib.reload(main_mod)
@@ -48,7 +34,8 @@ def seeded_db(setup_test_db):
     """Seed the test database with sample data."""
     conn = get_connection(setup_test_db)
     try:
-        conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
             INSERT INTO heartbeat_runs
                 (run_id, started_at, finished_at, duration_seconds, exit_code,
@@ -62,16 +49,16 @@ def seeded_db(setup_test_db):
                  'failed', 'CelticXfer', 'run_today', 3, 'Credit balance too low', NULL)
             """,
         )
-        conn.execute(
+        cur.execute(
             """
             INSERT INTO heartbeat_actions
                 (run_id, action_type, target_author, detail, succeeded)
             VALUES
-                ('run-1', 'browsed', NULL, 'hot', 1),
-                ('run-1', 'upvoted', 'eudaemon_0', 'supply chain security', 1),
-                ('run-1', 'commented', 'Pith', 'model switching', 1),
-                ('run-2', 'upvoted', 'm0ther', 'Good Samaritan', 1),
-                ('run-2', 'subscribed', NULL, 'consciousness', 1)
+                ('run-1', 'browsed', NULL, 'hot', TRUE),
+                ('run-1', 'upvoted', 'eudaemon_0', 'supply chain security', TRUE),
+                ('run-1', 'commented', 'Pith', 'model switching', TRUE),
+                ('run-2', 'upvoted', 'm0ther', 'Good Samaritan', TRUE),
+                ('run-2', 'subscribed', NULL, 'consciousness', TRUE)
             """,
         )
         conn.commit()

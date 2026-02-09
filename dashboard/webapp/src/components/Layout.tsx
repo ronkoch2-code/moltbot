@@ -20,6 +20,9 @@ export default function Layout({ children }: LayoutProps) {
               <Link to="/prompts" className="text-gray-400 hover:text-white transition-colors">
                 Prompts
               </Link>
+              <Link to="/security" className="text-gray-400 hover:text-white transition-colors">
+                Security
+              </Link>
             </nav>
           </div>
         </div>

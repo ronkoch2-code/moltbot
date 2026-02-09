@@ -2,9 +2,11 @@
 
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import psycopg2
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -12,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from dashboard.api.database import init_db
 from dashboard.api.models import HealthOut
-from dashboard.api.routers import actions, prompts, runs, stats
+from dashboard.api.routers import actions, prompts, runs, security, stats
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -20,12 +22,32 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
+_DB_INIT_MAX_RETRIES = 5
+_DB_INIT_BACKOFF_BASE = 2  # seconds
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize the database on startup."""
-    init_db()
-    logger.info("Dashboard API started")
+    """Initialize the database on startup with retry.
+
+    PostgreSQL may still be starting when the dashboard launches.
+    Retry with exponential backoff so the dashboard survives this.
+    """
+    for attempt in range(1, _DB_INIT_MAX_RETRIES + 1):
+        try:
+            init_db()
+            logger.info("Dashboard API started (db init on attempt %d)", attempt)
+            break
+        except psycopg2.OperationalError as exc:
+            if attempt < _DB_INIT_MAX_RETRIES:
+                wait = _DB_INIT_BACKOFF_BASE ** attempt
+                logger.warning(
+                    "Database connection failed on init (attempt %d/%d), retrying in %ds: %s",
+                    attempt, _DB_INIT_MAX_RETRIES, wait, exc,
+                )
+                time.sleep(wait)
+            else:
+                raise
     yield
 
 
@@ -47,6 +69,7 @@ app.include_router(runs.router)
 app.include_router(actions.router)
 app.include_router(stats.router)
 app.include_router(prompts.router)
+app.include_router(security.router)
 
 
 @app.get("/api/health", response_model=HealthOut)

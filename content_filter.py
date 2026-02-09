@@ -88,10 +88,21 @@ def _get_scanner():
     lifetime of the process.  This avoids blocking server startup
     and handles the case where llm-guard isn't installed gracefully.
 
+    Set CONTENT_FILTER_ML=false to skip ML model loading entirely
+    (saves ~1.5GB RAM). Regex patterns still apply.
     Threshold is configurable via CONTENT_FILTER_THRESHOLD env var.
     """
     global _scanner
     if _scanner is None:
+        # Allow disabling ML model to save memory on constrained hosts
+        ml_enabled = os.environ.get("CONTENT_FILTER_ML", "true").lower()
+        if ml_enabled in ("false", "0", "no", "off"):
+            logger.info(
+                "CONTENT_FILTER_ML=false — ML model disabled, using regex-only filtering"
+            )
+            _scanner = "unavailable"
+            return _scanner
+
         try:
             from llm_guard.input_scanners import PromptInjection
             from llm_guard.input_scanners.prompt_injection import MatchType

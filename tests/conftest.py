@@ -7,6 +7,70 @@ from unittest.mock import MagicMock, AsyncMock
 from typing import Dict, Any
 
 import httpx
+import psycopg2
+import psycopg2.extras
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL test database fixtures
+# ---------------------------------------------------------------------------
+
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    os.environ.get(
+        "DATABASE_URL",
+        "postgresql://moltbot:moltbot_dev@localhost:5432/moltbot",
+    ),
+)
+
+
+@pytest.fixture
+def pg_database_url():
+    """Return the test database URL."""
+    return TEST_DATABASE_URL
+
+
+@pytest.fixture
+def pg_clean_db(pg_database_url):
+    """Create a clean PostgreSQL database for testing.
+
+    Drops and recreates all tables before each test, then cleans up after.
+    Sets DATABASE_URL env var so dashboard.api.database picks it up.
+    """
+    old_url = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = pg_database_url
+
+    # Patch the module-level DATABASE_URL
+    import dashboard.api.database as db_mod
+    old_db_url = db_mod.DATABASE_URL
+    db_mod.DATABASE_URL = pg_database_url
+
+    conn = psycopg2.connect(pg_database_url, cursor_factory=psycopg2.extras.RealDictCursor)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    # Drop all tables in reverse dependency order
+    cur.execute("""
+        DROP TABLE IF EXISTS behavior_oddities CASCADE;
+        DROP TABLE IF EXISTS tool_calls CASCADE;
+        DROP TABLE IF EXISTS security_events CASCADE;
+        DROP TABLE IF EXISTS heartbeat_actions CASCADE;
+        DROP TABLE IF EXISTS heartbeat_runs CASCADE;
+        DROP TABLE IF EXISTS heartbeat_prompts CASCADE;
+    """)
+    conn.close()
+
+    # Initialize schema
+    db_mod.init_db(pg_database_url)
+
+    yield pg_database_url
+
+    # Restore
+    db_mod.DATABASE_URL = old_db_url
+    if old_url is not None:
+        os.environ["DATABASE_URL"] = old_url
+    else:
+        os.environ.pop("DATABASE_URL", None)
 
 
 # ---------------------------------------------------------------------------

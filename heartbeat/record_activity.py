@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record structured heartbeat activity from Claude output into SQLite.
+"""Record structured heartbeat activity from Claude output into PostgreSQL.
 
 Usage:
     python record_activity.py \\
@@ -13,22 +13,23 @@ Usage:
 
 Parses Claude's raw output to extract actions (browsed, upvoted, commented,
 posted, subscribed, welcomed, checked_status, checked_submolts) and the
-summary section, then writes everything to the heartbeat SQLite database.
+summary section, then writes everything to the heartbeat PostgreSQL database.
 """
 
 import argparse
 import os
 import re
-import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+import psycopg2
 
 # Add project root to path for imports
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from dashboard.api.database import DB_PATH, get_connection, init_db
+from dashboard.api.database import DATABASE_URL, get_connection, init_db
 
 # ---------------------------------------------------------------------------
 # Regex patterns for extracting actions from Claude output
@@ -270,7 +271,7 @@ def extract_summary(raw_output: str) -> str | None:
 
 
 def record_run(
-    db_path: str,
+    database_url: str,
     run_id: str,
     started_at: str,
     agent_name: str,
@@ -281,12 +282,12 @@ def record_run(
     finished_at: str | None = None,
     prompt_version_id: int | None = None,
 ) -> None:
-    """Record a heartbeat run and its parsed actions into SQLite.
+    """Record a heartbeat run and its parsed actions into PostgreSQL.
 
     Parameters
     ----------
-    db_path : str
-        Path to the SQLite database.
+    database_url : str
+        PostgreSQL connection URL.
     run_id : str
         Unique identifier for this run.
     started_at : str
@@ -306,7 +307,7 @@ def record_run(
     prompt_version_id : int | None
         ID of the prompt version used for this run.
     """
-    init_db(db_path)
+    init_db(database_url)
 
     summary = extract_summary(raw_output) if raw_output else None
     actions = extract_actions(raw_output) if raw_output else []
@@ -334,15 +335,25 @@ def record_run(
             error_message = "Credit balance too low"
             status = "failed"
 
-    conn = get_connection(db_path)
+    conn = get_connection(database_url)
     try:
-        conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
-            INSERT OR REPLACE INTO heartbeat_runs
+            INSERT INTO heartbeat_runs
                 (run_id, started_at, finished_at, duration_seconds, exit_code,
                  status, agent_name, script_variant, run_number, raw_output,
                  summary, error_message, prompt_version_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (run_id) DO UPDATE SET
+                finished_at = EXCLUDED.finished_at,
+                duration_seconds = EXCLUDED.duration_seconds,
+                exit_code = EXCLUDED.exit_code,
+                status = EXCLUDED.status,
+                raw_output = EXCLUDED.raw_output,
+                summary = EXCLUDED.summary,
+                error_message = EXCLUDED.error_message,
+                prompt_version_id = EXCLUDED.prompt_version_id
             """,
             (
                 run_id, started_at, finished_at, duration_seconds, exit_code,
@@ -352,12 +363,12 @@ def record_run(
         )
 
         for action in actions:
-            conn.execute(
+            cur.execute(
                 """
                 INSERT INTO heartbeat_actions
                     (run_id, action_type, target_id, target_title,
                      target_author, detail, succeeded)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     run_id,
@@ -366,7 +377,7 @@ def record_run(
                     action.get("target_title"),
                     action.get("target_author"),
                     action.get("detail"),
-                    1 if action.get("succeeded", True) else 0,
+                    action.get("succeeded", True),
                 ),
             )
 
@@ -378,7 +389,7 @@ def record_run(
 def main() -> None:
     """CLI entry point for recording heartbeat activity."""
     parser = argparse.ArgumentParser(
-        description="Record heartbeat activity to SQLite"
+        description="Record heartbeat activity to PostgreSQL"
     )
     parser.add_argument("--run-id", required=True, help="Unique run identifier")
     parser.add_argument("--started-at", required=True, help="ISO timestamp")
@@ -393,9 +404,9 @@ def main() -> None:
         help="Prompt version ID used for this run",
     )
     parser.add_argument(
-        "--db-path",
-        default=DB_PATH,
-        help=f"Database path (default: {DB_PATH})",
+        "--database-url",
+        default=DATABASE_URL,
+        help=f"Database URL (default: from DATABASE_URL env var)",
     )
 
     args = parser.parse_args()
@@ -411,7 +422,7 @@ def main() -> None:
     finished_at = args.finished_at or datetime.now(timezone.utc).isoformat()
 
     record_run(
-        db_path=args.db_path,
+        database_url=args.database_url,
         run_id=args.run_id,
         started_at=args.started_at,
         agent_name=args.agent_name,

@@ -12,7 +12,8 @@ router = APIRouter(prefix="/api/stats", tags=["stats"])
 def get_stats():
     """Get aggregate dashboard statistics."""
     with get_db() as conn:
-        run_stats = conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
             SELECT
                 COUNT(*) as total_runs,
@@ -22,9 +23,10 @@ def get_stats():
                 MAX(started_at) as last_run_at
             FROM heartbeat_runs
             """
-        ).fetchone()
+        )
+        run_stats = cur.fetchone()
 
-        action_stats = conn.execute(
+        cur.execute(
             """
             SELECT
                 COUNT(*) as total_actions,
@@ -34,7 +36,8 @@ def get_stats():
                 SUM(CASE WHEN action_type = 'subscribed' THEN 1 ELSE 0 END) as total_subscriptions
             FROM heartbeat_actions
             """
-        ).fetchone()
+        )
+        action_stats = cur.fetchone()
 
     return StatsOut(
         total_runs=run_stats["total_runs"] or 0,
@@ -56,15 +59,16 @@ def get_timeline(
 ):
     """Get daily counts for timeline charting."""
     with get_db() as conn:
-        rows = conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
             SELECT
-                date(r.started_at) as date,
+                date(r.started_at::timestamp) as date,
                 COUNT(DISTINCT r.run_id) as runs,
-                COALESCE(a_stats.total_actions, 0) as actions,
-                COALESCE(a_stats.upvotes, 0) as upvotes,
-                COALESCE(a_stats.comments, 0) as comments,
-                COALESCE(a_stats.posts, 0) as posts
+                COALESCE(SUM(a_stats.total_actions), 0) as actions,
+                COALESCE(SUM(a_stats.upvotes), 0) as upvotes,
+                COALESCE(SUM(a_stats.comments), 0) as comments,
+                COALESCE(SUM(a_stats.posts), 0) as posts
             FROM heartbeat_runs r
             LEFT JOIN (
                 SELECT
@@ -76,16 +80,17 @@ def get_timeline(
                 FROM heartbeat_actions a
                 GROUP BY a.run_id
             ) a_stats ON a_stats.run_id = r.run_id
-            WHERE r.started_at >= date('now', ?)
-            GROUP BY date(r.started_at)
-            ORDER BY date(r.started_at)
+            WHERE r.started_at >= (CURRENT_DATE - make_interval(days => %s))::text
+            GROUP BY date(r.started_at::timestamp)
+            ORDER BY date(r.started_at::timestamp)
             """,
-            (f"-{days} days",),
-        ).fetchall()
+            (days,),
+        )
+        rows = cur.fetchall()
 
     return [
         TimelinePoint(
-            date=row["date"],
+            date=str(row["date"]),
             runs=row["runs"],
             actions=row["actions"],
             upvotes=row["upvotes"],

@@ -14,16 +14,19 @@ router = APIRouter(tags=["actions"])
 def get_run_actions(run_id: str):
     """Get all actions for a specific run."""
     with get_db() as conn:
-        run = conn.execute(
-            "SELECT run_id FROM heartbeat_runs WHERE run_id = ?", (run_id,)
-        ).fetchone()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT run_id FROM heartbeat_runs WHERE run_id = %s", (run_id,)
+        )
+        run = cur.fetchone()
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        rows = conn.execute(
-            "SELECT * FROM heartbeat_actions WHERE run_id = ? ORDER BY id",
+        cur.execute(
+            "SELECT * FROM heartbeat_actions WHERE run_id = %s ORDER BY id",
             (run_id,),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
 
     return [
         ActionOut(
@@ -35,7 +38,7 @@ def get_run_actions(run_id: str):
             target_author=row["target_author"],
             detail=row["detail"],
             succeeded=bool(row["succeeded"]),
-            created_at=row["created_at"],
+            created_at=str(row["created_at"]),
         )
         for row in rows
     ]
@@ -49,20 +52,23 @@ def get_run_actions(run_id: str):
 def create_run_actions(run_id: str, actions: list[ActionCreateIn]):
     """Record actions for a run."""
     with get_db() as conn:
-        run = conn.execute(
-            "SELECT run_id FROM heartbeat_runs WHERE run_id = ?", (run_id,)
-        ).fetchone()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT run_id FROM heartbeat_runs WHERE run_id = %s", (run_id,)
+        )
+        run = cur.fetchone()
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
 
         created = []
         for action in actions:
-            cursor = conn.execute(
+            cur.execute(
                 """
                 INSERT INTO heartbeat_actions
                     (run_id, action_type, target_id, target_title,
                      target_author, detail, succeeded)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
                 """,
                 (
                     run_id,
@@ -71,13 +77,10 @@ def create_run_actions(run_id: str, actions: list[ActionCreateIn]):
                     action.target_title,
                     action.target_author,
                     action.detail,
-                    1 if action.succeeded else 0,
+                    action.succeeded,
                 ),
             )
-            row = conn.execute(
-                "SELECT * FROM heartbeat_actions WHERE id = ?",
-                (cursor.lastrowid,),
-            ).fetchone()
+            row = cur.fetchone()
             created.append(
                 ActionOut(
                     id=row["id"],
@@ -88,7 +91,7 @@ def create_run_actions(run_id: str, actions: list[ActionCreateIn]):
                     target_author=row["target_author"],
                     detail=row["detail"],
                     succeeded=bool(row["succeeded"]),
-                    created_at=row["created_at"],
+                    created_at=str(row["created_at"]),
                 )
             )
         conn.commit()
@@ -109,33 +112,35 @@ def list_actions(
     params = []
 
     if action_type:
-        conditions.append("a.action_type = ?")
+        conditions.append("a.action_type = %s")
         params.append(action_type)
     if date_from:
-        conditions.append("a.created_at >= ?")
+        conditions.append("a.created_at >= %s::timestamptz")
         params.append(date_from)
     if date_to:
-        conditions.append("a.created_at <= ?")
+        conditions.append("a.created_at <= %s::timestamptz")
         params.append(date_to)
 
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
     with get_db() as conn:
-        total_row = conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             f"SELECT COUNT(*) as total FROM heartbeat_actions a {where}", params
-        ).fetchone()
-        total = total_row["total"]
+        )
+        total = cur.fetchone()["total"]
 
         offset = (page - 1) * per_page
-        rows = conn.execute(
+        cur.execute(
             f"""
             SELECT * FROM heartbeat_actions a
             {where}
             ORDER BY a.created_at DESC
-            LIMIT ? OFFSET ?
+            LIMIT %s OFFSET %s
             """,
             [*params, per_page, offset],
-        ).fetchall()
+        )
+        rows = cur.fetchall()
 
     actions = [
         ActionOut(
@@ -147,7 +152,7 @@ def list_actions(
             target_author=row["target_author"],
             detail=row["detail"],
             succeeded=bool(row["succeeded"]),
-            created_at=row["created_at"],
+            created_at=str(row["created_at"]),
         )
         for row in rows
     ]

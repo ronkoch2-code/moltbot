@@ -3,7 +3,37 @@
 ## Current Task
 _(none — all tasks complete)_
 
-## Plan — 2026-02-08
+## Plan — 2026-02-08 (continued)
+
+### Block 11: SQLite → PostgreSQL Migration
+- [x] **11.1** Add PostgreSQL service to docker-compose.yml + update .env
+- [x] **11.2** Rewrite database.py — psycopg2, PostgreSQL DDL, get_connection/init_db/get_db
+- [x] **11.3** Update all 5 router files — SQL translation (? → %s, RETURNING, booleans, date functions)
+- [x] **11.4** Update main.py lifespan — psycopg2.OperationalError
+- [x] **11.5** Update host-side scripts — record_activity.py, collect_mcp_logs.py, seed_prompt.py, backfill_from_log.py
+- [x] **11.6** Update shell scripts — export DATABASE_URL from .env
+- [x] **11.7** Update Dockerfile and requirements — psycopg2-binary
+- [x] **11.8** Create migration script — scripts/migrate_sqlite_to_pg.py
+- [x] **11.9** Update tests — conftest.py with pg_clean_db fixture, all 4 test files
+- [x] **11.10** Documentation — CLAUDE.md and DEVELOPMENT_STATE.md
+
+### Block 10: Server Stability & Bridge Resilience
+- [x] **10.1** Docker resource limits — `mem_limit: 2g` (MCP) / `256m` (dashboard), `cpus`, `memswap_limit`
+- [x] **10.2** Bridge retry logic — 3 retries with backoff on ConnectTimeout/ConnectError/ReadTimeout
+- [x] **10.3** Bridge startup health check — verify MCP server reachable before accepting requests
+- [x] **10.4** Auth token passthrough — heartbeat scripts export MCP_AUTH_TOKEN from `.env` to bridge subprocess
+- [x] **10.5** ML filter kill switch — `CONTENT_FILTER_ML=false` env var skips DeBERTa model, saves ~1.5GB RAM
+
+### Block 9: MCP Log Analytics & Security Event Tracking
+- [x] **9.1** Database schema — 3 new tables (security_events, tool_calls, behavior_oddities) + migrations
+- [x] **9.2** Pydantic models — SecurityEventOut, ToolCallOut, OddityOut, SecurityStatsOut + paginated variants
+- [x] **9.3** Log collector script — `heartbeat/collect_mcp_logs.py` with parsers and oddity detection
+- [x] **9.4** Docker Compose — SECURITY_LOG_PATH env var + logs volume mount
+- [x] **9.5** API router — `dashboard/api/routers/security.py` (events, tool-calls, oddities, stats, timeline)
+- [x] **9.6** React frontend — SecurityPage.tsx with tabbed tables, stats bar, types, API client, route, nav
+- [x] **9.7** Heartbeat integration — Added collect_mcp_logs.py call to both shell scripts
+- [x] **9.8** Tests — 24 parser/collector tests + 18 API endpoint tests = 42 new tests (181 total)
+- [x] **9.9** Updated DEVELOPMENT_STATE.md and CLAUDE.md
 
 ### Block 8: `moltbook_update_identity` MCP Tool
 - [x] **8.1** Add `MoltbookUpdateIdentityInput` Pydantic model to `server.py`
@@ -54,6 +84,92 @@ _(none — all tasks complete)_
 ---
 
 ## Completed Work
+
+### 2026-02-08 — SQLite → PostgreSQL Migration
+
+**What**: Migrated all database access from SQLite-on-SMB to PostgreSQL in a Docker container with a named volume. Eliminates SMB file locking issues (stranded `.db-journal` files corrupting mounts) and "database is locked" errors.
+
+**Architecture**: PostgreSQL 16-alpine runs as a Docker service (`moltbot-postgres`) with a named volume (`pgdata`) on local disk. Dashboard container connects via Docker network (`postgres:5432`). Host-side scripts connect via published port (`localhost:5432`). No database files touch SMB.
+
+**Files Created**:
+- `scripts/migrate_sqlite_to_pg.py` — One-time SQLite → PostgreSQL data migration (respects FK order, resets sequences)
+
+**Files Rewritten**:
+- `dashboard/api/database.py` — sqlite3 → psycopg2 with RealDictCursor, full PostgreSQL DDL schema
+- `dashboard/api/routers/runs.py` — %s params, RETURNING *, cursor-based access
+- `dashboard/api/routers/actions.py` — Same pattern
+- `dashboard/api/routers/stats.py` — PostgreSQL date functions (make_interval), SUM() aggregates
+- `dashboard/api/routers/security.py` — Same pattern
+- `dashboard/api/routers/prompts.py` — Boolean TRUE/FALSE, RETURNING *
+- `heartbeat/record_activity.py` — ON CONFLICT DO UPDATE, --database-url CLI arg
+- `heartbeat/collect_mcp_logs.py` — STRING_AGG, date_trunc, ON CONFLICT DO NOTHING
+- `heartbeat/seed_prompt.py` — psycopg2 connection
+- `heartbeat/backfill_from_log.py` — ON CONFLICT DO NOTHING
+
+**Files Modified**:
+- `docker-compose.yml` — Added postgres service + pgdata volume, removed data bind mount from dashboard
+- `.env` / `.env.example` — Added POSTGRES_PASSWORD, DATABASE_URL
+- `dashboard/api/main.py` — psycopg2.OperationalError
+- `dashboard/Dockerfile` — Removed SQLite data dir creation
+- `dashboard/api/requirements.txt` — aiosqlite → psycopg2-binary
+- `requirements-dev.txt` — Added psycopg2-binary
+- `heartbeat/run_today.sh` — Export DATABASE_URL
+- `heartbeat/celticxfer_heartbeat.sh` — Export DATABASE_URL
+- `tests/conftest.py` — pg_clean_db fixture (drops/recreates tables, patches DATABASE_URL)
+- `tests/test_dashboard_api.py` — PostgreSQL fixtures and SQL
+- `tests/test_record_activity.py` — database_url parameter
+- `tests/test_collect_mcp_logs.py` — PostgreSQL fixtures and SQL
+- `tests/test_security_analytics.py` — PostgreSQL fixtures and SQL
+- `CLAUDE.md` — PostgreSQL references throughout
+- `DEVELOPMENT_STATE.md` — Migration plan and completion
+
+**Deployment**: `docker compose up -d postgres` → `python3 scripts/migrate_sqlite_to_pg.py` → `docker compose up --build -d`
+
+**Verification**: 181/181 tests pass against PostgreSQL.
+
+### 2026-02-08 — Server Stability & Bridge Resilience
+
+**What**: Fixed intermittent server crashes (OOM) and heartbeat agent tool failures caused by unbounded container memory and fragile bridge connections.
+
+**Root cause**: DeBERTa v3 content filter consumes ~1.5GB RAM. With no resource limits, both containers could consume unlimited memory, causing the Linux OOM killer to crash the entire host. When the MCP server was slow or unreachable, the stdio bridge failed on the first connection attempt with no retry, causing Claude to hallucinate "I don't have MCP tools."
+
+**Files Modified**:
+- `docker-compose.yml` — Resource limits (configurable via `MCP_MEM_LIMIT`), `CONTENT_FILTER_ML` env var
+- `content_filter.py` — `CONTENT_FILTER_ML=false` skips DeBERTa model loading entirely (regex still applies)
+- `stdio_bridge.py` — 3-retry loop with backoff for ConnectTimeout/ConnectError/ReadTimeout; startup health check
+- `heartbeat/celticxfer_heartbeat.sh` — Exports `MCP_AUTH_TOKEN` from project `.env` before invoking Claude
+- `heartbeat/run_today.sh` — Same auth token export
+- `.env.example` — Documented `CONTENT_FILTER_ML` option
+
+**Verification**: 181/181 tests pass (26 content filter, 155 rest). docker-compose.yml validates.
+
+### 2026-02-08 — MCP Log Analytics & Security Event Tracking
+
+**What**: Built automatic collection, structured storage, API endpoints, and a React dashboard page for MCP server security events — injection attempts, unauthorized access, tool call tracking, and behavioral oddity detection.
+
+**Architecture**: Host-side Python script (`collect_mcp_logs.py`) runs after each heartbeat, reads structured JSONL from `data/logs/security_audit.jsonl` and Docker container logs, parses events into SQLite, and detects anomalies (duplicate votes, failed API calls, excessive call rates). Dashboard API serves paginated/filterable endpoints. React page shows stats bar + tabbed tables.
+
+**Files Created**:
+- `heartbeat/collect_mcp_logs.py` — Log collector with 3 parsers + oddity detector
+- `dashboard/api/routers/security.py` — 6 API endpoints (events, tool-calls, oddities, stats, timeline)
+- `dashboard/webapp/src/pages/SecurityPage.tsx` — Tabbed security dashboard UI
+- `data/logs/.gitkeep` — Logs directory for security audit JSONL
+- `tests/test_collect_mcp_logs.py` — 24 parser/collector/detector tests
+- `tests/test_security_analytics.py` — 18 API endpoint tests
+
+**Files Modified**:
+- `dashboard/api/database.py` — 3 new tables + migration support
+- `dashboard/api/models.py` — 7 new Pydantic models
+- `dashboard/api/main.py` — Registered security router
+- `docker-compose.yml` — SECURITY_LOG_PATH env var + logs volume mount
+- `heartbeat/run_today.sh` — Added collector call
+- `heartbeat/celticxfer_heartbeat.sh` — Added collector call
+- `dashboard/webapp/src/types/index.ts` — 7 new TypeScript interfaces
+- `dashboard/webapp/src/api/client.ts` — 5 new fetch functions
+- `dashboard/webapp/src/App.tsx` — /security route
+- `dashboard/webapp/src/components/Layout.tsx` — Security nav link
+
+**Verification**: 181/181 tests pass (42 new).
 
 ### 2026-02-08 — `moltbook_update_identity` MCP Tool
 
@@ -217,13 +333,11 @@ docker-compose.yml, .env.example, pyproject.toml, heartbeat/config.example.json
 - Added `CONTENT_FILTER_THRESHOLD` and `LOG_LEVEL` env vars
 
 ## Known Issues
-_(none)_
+- `data/heartbeat.db` still exists as read-only backup; can be deleted once PostgreSQL is confirmed stable
 
 ## Not In Scope (Future Sessions)
 - CI/CD pipeline (GitHub Actions)
-- Docker resource limits (`mem_limit`, `cpus`)
 - Pagination/cursor support for feed browsing
 - Post/comment editing & deletion tools
 - Search functionality
 - Retry logic on transient 5xx errors
-- Security review remediation (see security-review/)

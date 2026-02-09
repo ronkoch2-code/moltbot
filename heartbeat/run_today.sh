@@ -24,6 +24,21 @@ INTERVAL_SECONDS=1800  # 30 minutes
 AGENT_NAME=$(jq -r '.agent_name' "$CONFIG_FILE")
 PROFILE_URL=$(jq -r '.profile_url' "$CONFIG_FILE")
 
+# ---- Load MCP auth token from project .env -----------------------------------
+
+ENV_FILE="$PROJECT_DIR/.env"
+if [ -f "$ENV_FILE" ]; then
+    MCP_AUTH_TOKEN=$(grep -E '^MCP_AUTH_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
+    if [ -n "$MCP_AUTH_TOKEN" ]; then
+        export MCP_AUTH_TOKEN
+    fi
+
+    DATABASE_URL=$(grep -E '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)
+    if [ -n "$DATABASE_URL" ]; then
+        export DATABASE_URL
+    fi
+fi
+
 trap 'echo ""; echo "🛑 Heartbeat stopped. Total runs: $RUN_COUNT"; exit 0' INT TERM
 
 RUN_COUNT=0
@@ -155,7 +170,7 @@ while true; do
         --arg result "$RESULT" \
         '{last_heartbeat: $ts, run_number: $run, last_result: $result}' > "$STATE_FILE"
 
-    # Record structured activity to SQLite dashboard
+    # Record structured activity to PostgreSQL dashboard
     RUN_UUID="run-today-$(date +%s)-${RUN_COUNT}"
     TMPFILE=$(mktemp)
     echo "$RESULT" > "$TMPFILE"
@@ -170,6 +185,9 @@ while true; do
         --output-file "$TMPFILE" \
         ${PROMPT_VERSION:+--prompt-version "$PROMPT_VERSION"} 2>&1 || echo "⚠️  Activity recording failed (non-fatal)"
     rm -f "$TMPFILE"
+
+    # Collect MCP server logs and detect oddities
+    python3 "$SCRIPT_DIR/collect_mcp_logs.py" --detect-oddities 2>&1 || echo "⚠️  Log collection failed (non-fatal)"
 
     echo ""
 

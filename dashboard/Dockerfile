@@ -45,9 +45,6 @@ COPY --chown=dashboard:dashboard --from=webapp-builder /build/dist/ /app/dashboa
 # Ensure all app files are readable (host umask may produce restrictive permissions)
 RUN chmod -R u+rX,go+rX /app/dashboard/
 
-# Create data directory for SQLite database
-RUN mkdir -p /app/data && chown -R dashboard:dashboard /app/data
-
 # Expose FastAPI port
 EXPOSE 8081
 
