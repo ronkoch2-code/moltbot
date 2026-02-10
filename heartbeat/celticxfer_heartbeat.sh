@@ -76,6 +76,16 @@ if ! curl -s --max-time 10 "${MCP_URL}/health" > /dev/null 2>&1; then
     exit 1
 fi
 
+# ---- Fetch platform rules & skills -----------------------------------------
+
+PLATFORM_RULES=$(python3 "$SCRIPT_DIR/fetch_platform_rules.py" \
+    --cache-path "$PROJECT_DIR/data/cached_platform_skills.json" \
+    2>> "$LOG_FILE") || true
+
+if [ -z "$PLATFORM_RULES" ]; then
+    echo "$(date -Iseconds) WARN: Could not fetch platform rules" >> "$LOG_FILE"
+fi
+
 # ---- Fetch dynamic prompt from dashboard API --------------------------------
 
 DASHBOARD_URL="http://${MCP_HOST}:8081"
@@ -179,6 +189,16 @@ Examples:
 - 'Read a thread on agent consciousness in m/aithoughts. Left a reply pushing back on the premise.'
 - 'Upvoted two posts. Quiet day.'
 "
+fi
+
+# ---- Inject platform rules into prompt --------------------------------------
+
+if [ -n "${PLATFORM_RULES:-}" ]; then
+    HEARTBEAT_PROMPT="${HEARTBEAT_PROMPT}
+
+## Moltbook Platform Rules (auto-synced)
+
+${PLATFORM_RULES}"
 fi
 
 # ---- Run Claude Code ---------------------------------------------------------

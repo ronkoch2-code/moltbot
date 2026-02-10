@@ -3,6 +3,64 @@
 ## Current Task
 _(none — all tasks complete)_
 
+## Plan — 2026-02-10
+
+### Block 17: Moltbook Platform Rules & Skills Sync
+- [x] **17.1** Fix RateLimiter multi-window support (list of windows per action)
+- [x] **17.2** Correct rate limit values to match platform rules (1 post/30min, 1 comment/20sec + 50/day)
+- [x] **17.3** Add subscribe rate limit check to moltbook_subscribe()
+- [x] **17.4** Create heartbeat/fetch_platform_rules.py (fetch, cache, change detect, prompt output)
+- [x] **17.5** Integrate rules fetch into celticxfer_heartbeat.sh
+- [x] **17.6** Integrate rules fetch into run_today.sh
+- [x] **17.7** Add data/cached_platform_skills.json to .gitignore
+- [x] **17.8** Write tests — 20 fetch_platform_rules tests + 7 rate limiter tests (27 new, 224 total passing)
+- [x] **17.9** Update DEVELOPMENT_STATE.md
+
+## Plan — 2026-02-09
+
+### Block 12: Infrastructure Fixes + Security Hardening
+- [x] **12.1** Fix DATABASE_URL in .env (localhost → 192.168.153.8 for Mac→Zorin connection)
+- [x] **12.2** Change heartbeat interval to 60 minutes
+- [x] **12.3** Fix Docker healthcheck zombie processes (PYTHONDONTWRITEBYTECODE=1)
+- [x] **12.4** Diagnose MCP server CPU overload (DeBERTa inference pegging CPU)
+- [x] **12.5** Add LRU scan result cache to content_filter.py (CPU 199% → 4.2%)
+- [x] **12.6** Remove CPU limit, bump memory to 4GB for MCP container
+- [x] **12.7** Fix Docker DNS (daemon.json with Google DNS)
+- [x] **12.8** Reduce feed limit to 10 posts in both heartbeat scripts
+- [x] **12.9** Fix rebuild-test.sh (remove SQLite migration, fix MAX_WAIT bug, add DNS config)
+
+### Block 13: Author Blocklist Feature
+- [x] **13.1** Blocklist state management in content_filter.py (JSON persistence, auto-block at threshold)
+- [x] **13.2** Layer 0 pre-check in filter_post() (skip ML scan for blocked authors)
+- [x] **13.3** Database table + API endpoints in security router (list/block/unblock)
+- [x] **13.4** Docker env vars (AUTHOR_BLOCK_THRESHOLD, AUTHOR_BLOCK_DURATION_HOURS, BLOCKLIST_PATH)
+- [x] **13.5** Sync function in collect_mcp_logs.py
+- [x] **13.6** 22 new tests (48 total content filter tests)
+
+### Block 14: Secret Leak Fix
+- [x] **14.1** Remove hardcoded moltbot_dev from database.py, conftest.py, docker-compose.yml
+
+### Block 15: Security Review Issues (GitHub #22-#32)
+- [x] **15.1** Create 11 GitHub issues from security review findings
+- [x] **15.2** #23 API key rotation — Closed as won't-fix (Moltbook doesn't support rotation)
+- [x] **15.3** #24 PG password in settings.local.json — Fixed
+- [x] **15.4** #25 Model validation — Added max_length, Literal types
+- [x] **15.5** #27 Anti-hallucination — Added guideline to celticxfer_heartbeat.sh
+- [x] **15.6** #29 Comment mismatch — Fixed run_today.sh header comments
+
+### Block 16: Dashboard API Authentication (#22 HIGH-01)
+- [x] **16.1** Create auth dependency module (dashboard/api/auth.py)
+- [x] **16.2** Wire auth into all 5 routers (runs, actions, stats, prompts, security)
+- [x] **16.3** Restrict CORS in main.py (configurable origins via DASHBOARD_CORS_ORIGINS)
+- [x] **16.4** Add DASHBOARD_AUTH_TOKEN + DASHBOARD_CORS_ORIGINS to docker-compose.yml
+- [x] **16.5** Add env vars to .env.example
+- [x] **16.6** Add auth header to server.py moltbook_update_identity tool
+- [x] **16.7** Add auth header to heartbeat script curl calls
+- [x] **16.8** Add auth header to React webapp client.ts (VITE_DASHBOARD_AUTH_TOKEN)
+- [x] **16.9** Add build arg to dashboard Dockerfile for Vite env var
+- [x] **16.10** Write 12 auth tests (open mode + protected mode)
+- [x] **16.11** Verify 44 existing tests still pass in open mode
+
 ## Plan — 2026-02-08 (continued)
 
 ### Block 11: SQLite → PostgreSQL Migration
@@ -84,6 +142,60 @@ _(none — all tasks complete)_
 ---
 
 ## Completed Work
+
+### 2026-02-10 — Moltbook Platform Rules & Skills Sync
+
+**What**: Added automatic fetching and caching of Moltbook platform skill files (rules, heartbeat, messaging, skill docs) on each heartbeat run, with change detection and prompt injection. Fixed the server-side rate limiter to support multiple windows per action and corrected values to match actual platform rules.
+
+**Architecture**: `fetch_platform_rules.py` fetches 4 markdown files from moltbook.com via stdlib urllib, compares SHA-256 hashes against a local JSON cache (`data/cached_platform_skills.json`), extracts compact rules/guidelines, and outputs them to stdout. Heartbeat shell scripts capture stdout and append it to the prompt. Falls back to cache on fetch failure, and to hardcoded minimal rules if no cache exists.
+
+**Rate Limiter Changes**: `RateLimiter` now accepts `list[tuple[int, float]]` per action (multiple windows). Platform-correct values: 1 post/30 min, 1 comment/20 sec + 50/day, 30 votes/hr safety cap, 1 subscribe/hr. Added subscribe rate limit check to `moltbook_subscribe()`.
+
+**Files Created**:
+- `heartbeat/fetch_platform_rules.py` — Platform rules fetcher with cache, change detection, prompt builder
+- `tests/test_fetch_platform_rules.py` — 20 tests (fetch, cache, changes, prompt builder, integration)
+
+**Files Modified**:
+- `server.py` — Multi-window RateLimiter, correct rate limit values, subscribe check
+- `heartbeat/celticxfer_heartbeat.sh` — Platform rules fetch + prompt injection
+- `heartbeat/run_today.sh` — Platform rules fetch + prompt injection (per-iteration)
+- `.gitignore` — Added data/cached_platform_skills.json
+- `tests/test_server.py` — 7 new rate limiter tests
+
+**Verification**: 224/224 tests pass (27 new). 18 pre-existing failures in test_security_analytics.py (auth headers missing from tests — not related to this change).
+
+### 2026-02-09 — Dashboard API Authentication (Issue #22)
+
+**What**: Added optional bearer token authentication to all dashboard API endpoints. When `DASHBOARD_AUTH_TOKEN` is set, all API requests (except `/api/health`) require `Authorization: Bearer <token>`. When unset, the API runs in open mode (backwards compatible).
+
+**Architecture**: FastAPI dependency injection via `require_auth()` in `dashboard/api/auth.py`. Uses `hmac.compare_digest()` for timing-safe token comparison. Router-level `dependencies=[Depends(require_auth)]` protects all endpoints.
+
+**Files Created**:
+- `dashboard/api/auth.py` — Bearer token auth dependency (open mode if unset, 401 if wrong)
+- `tests/test_dashboard_auth.py` — 12 tests (open mode, protected mode, all routers)
+
+**Files Modified**:
+- `dashboard/api/routers/runs.py` — Added auth dependency
+- `dashboard/api/routers/actions.py` — Added auth dependency
+- `dashboard/api/routers/stats.py` — Added auth dependency
+- `dashboard/api/routers/prompts.py` — Added auth dependency
+- `dashboard/api/routers/security.py` — Added auth dependency
+- `dashboard/api/main.py` — Configurable CORS origins (DASHBOARD_CORS_ORIGINS env var)
+- `server.py` — Auth header on dashboard API calls (DASHBOARD_AUTH_TOKEN)
+- `docker-compose.yml` — DASHBOARD_AUTH_TOKEN + DASHBOARD_CORS_ORIGINS env vars + build arg
+- `dashboard/Dockerfile` — VITE_DASHBOARD_AUTH_TOKEN build arg for React
+- `dashboard/webapp/src/api/client.ts` — Auth header on all fetch/post calls
+- `heartbeat/run_today.sh` — Auth header on curl calls
+- `heartbeat/celticxfer_heartbeat.sh` — Auth header on curl calls
+- `.env.example` — Documented DASHBOARD_AUTH_TOKEN and DASHBOARD_CORS_ORIGINS
+
+**Verification**: 56 dashboard tests pass (12 new auth + 44 existing in open mode).
+
+### 2026-02-09 — Infrastructure Fixes + Author Blocklist + Security Issues
+
+**What**: Fixed Mac→Zorin connectivity, MCP server CPU overload (scan cache), Docker DNS instability, heartbeat interval/feed limits. Implemented author blocklist feature. Fixed GitGuardian secret leak. Created 11 GitHub issues from security review and resolved 5 (#23-25, #27, #29).
+
+**Key metrics**: MCP server CPU dropped from 199% to 4.2% after adding scan cache.
 
 ### 2026-02-08 — SQLite → PostgreSQL Migration
 

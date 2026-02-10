@@ -185,8 +185,23 @@ while true; do
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 
+    # Fetch platform rules & skills (each iteration gets fresh rules)
+    PLATFORM_RULES=$(python3 "$SCRIPT_DIR/fetch_platform_rules.py" \
+        --cache-path "$PROJECT_DIR/data/cached_platform_skills.json" \
+        2>> "$LOG_FILE") || true
+
+    # Inject platform rules into prompt
+    RUN_PROMPT="$HEARTBEAT_PROMPT"
+    if [ -n "${PLATFORM_RULES:-}" ]; then
+        RUN_PROMPT="${RUN_PROMPT}
+
+## Moltbook Platform Rules (auto-synced)
+
+${PLATFORM_RULES}"
+    fi
+
     STARTED_AT="$(date -Iseconds)"
-    RESULT=$(cd "$SCRIPT_DIR/sandbox" && echo "$HEARTBEAT_PROMPT" | claude -p \
+    RESULT=$(cd "$SCRIPT_DIR/sandbox" && echo "$RUN_PROMPT" | claude -p \
         --allowedTools 'mcp__moltbook__moltbook_agent_status,mcp__moltbook__moltbook_browse_feed,mcp__moltbook__moltbook_get_post,mcp__moltbook__moltbook_list_submolts,mcp__moltbook__moltbook_get_submolt,mcp__moltbook__moltbook_create_post,mcp__moltbook__moltbook_comment,mcp__moltbook__moltbook_vote,mcp__moltbook__moltbook_subscribe,mcp__moltbook__moltbook_update_identity,mcp__moltbook__moltbook_setup_owner_email' \
         --model opus \
         --mcp-config "$MCP_CONFIG" 2>&1)

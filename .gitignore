@@ -8,6 +8,7 @@ heartbeat/heartbeat.log
 heartbeat/heartbeat.error.log
 heartbeat/heartbeat-state.json
 logs/
+backups/
 *.log
 
 # Test output
@@ -30,6 +31,7 @@ coverage.xml
 data/heartbeat.db
 data/heartbeat.db-wal
 data/heartbeat.db-shm
+data/cached_platform_skills.json
 dashboard/webapp/node_modules/
 dashboard/webapp/dist/
 

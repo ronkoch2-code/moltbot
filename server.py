@@ -40,6 +40,7 @@ logging.basicConfig(
 
 MOLTBOOK_API_BASE = "https://www.moltbook.com/api/v1"
 DASHBOARD_API_URL = os.environ.get("DASHBOARD_API_URL", "http://moltbot-dashboard:8081")
+DASHBOARD_AUTH_TOKEN = os.environ.get("DASHBOARD_AUTH_TOKEN", "")
 DEFAULT_FEED_LIMIT = 25
 MAX_FEED_LIMIT = 100
 CREDENTIALS_PATH = os.environ.get(
@@ -170,6 +171,7 @@ def _http_error_response(e: httpx.HTTPStatusError) -> Dict[str, Any]:
     return {
         "error": messages.get(status, f"HTTP {status} from Moltbook API."),
         "status": status,
+        "detail": body,
     }
 
 
@@ -260,17 +262,35 @@ def _strip_security_metadata(data: Any) -> Any:
 
 
 class RateLimiter:
-    """Simple in-memory rate limiter using sliding window."""
+    """Simple in-memory rate limiter using sliding window.
 
-    def __init__(self, limits: Dict[str, tuple[int, float]]):
+    Supports multiple windows per action (e.g., burst + daily limits).
+    """
+
+    def __init__(self, limits: Dict[str, list[tuple[int, float]]]):
         """Initialize the rate limiter.
 
         Args:
-            limits: Dict mapping action names to (max_calls, window_seconds) tuples.
-                   Example: {"post": (5, 3600)} allows 5 posts per hour.
+            limits: Dict mapping action names to lists of (max_calls, window_seconds)
+                   tuples. Each action can have multiple windows enforced simultaneously.
+                   Example: {"comment": [(1, 20), (50, 86400)]} allows 1 comment per
+                   20 seconds AND 50 comments per day.
         """
         self.limits = limits
         self.call_history: Dict[str, List[float]] = {action: [] for action in limits.keys()}
+
+    def _format_window(self, window_seconds: float) -> str:
+        """Format a window duration as a human-readable string."""
+        if window_seconds < 60:
+            return f"{window_seconds:.0f} second{'s' if window_seconds != 1 else ''}"
+        if window_seconds < 3600:
+            minutes = window_seconds / 60
+            return f"{minutes:.0f} minute{'s' if minutes != 1 else ''}"
+        if window_seconds < 86400:
+            hours = window_seconds / 3600
+            return f"{hours:.0f} hour{'s' if hours != 1 else ''}"
+        days = window_seconds / 86400
+        return f"{days:.0f} day{'s' if days != 1 else ''}"
 
     def check(self, action: str) -> None:
         """Check if an action is allowed under rate limits.
@@ -279,35 +299,39 @@ class RateLimiter:
             action: The action type to check (e.g., "post", "comment", "vote").
 
         Raises:
-            ValueError: If the rate limit for this action has been exceeded.
+            ValueError: If any rate limit window for this action has been exceeded.
         """
         if action not in self.limits:
             return
 
-        max_calls, window_seconds = self.limits[action]
         now = time.monotonic()
-        cutoff = now - window_seconds
 
-        # Remove expired timestamps
+        # Check each window for this action
+        for max_calls, window_seconds in self.limits[action]:
+            cutoff = now - window_seconds
+            recent = [ts for ts in self.call_history[action] if ts > cutoff]
+            if len(recent) >= max_calls:
+                window_str = self._format_window(window_seconds)
+                raise ValueError(
+                    f"Rate limit exceeded: maximum {max_calls} {action}s per "
+                    f"{window_str}. Try again later."
+                )
+
+        # Prune old timestamps (beyond the largest window)
+        max_window = max(w for _, w in self.limits[action])
+        cutoff = now - max_window
         self.call_history[action] = [ts for ts in self.call_history[action] if ts > cutoff]
-
-        # Check if limit exceeded
-        if len(self.call_history[action]) >= max_calls:
-            window_hours = window_seconds / 3600
-            raise ValueError(
-                f"Rate limit exceeded: maximum {max_calls} {action}s per "
-                f"{window_hours:.0f} hour{'s' if window_hours != 1 else ''}. Try again later."
-            )
 
         # Record this call
         self.call_history[action].append(now)
 
 
-# Create module-level rate limiter instance
+# Create module-level rate limiter instance with platform-correct values
 _rate_limiter = RateLimiter({
-    "post": (5, 3600),      # 5 posts per hour
-    "comment": (20, 3600),  # 20 comments per hour
-    "vote": (60, 3600),     # 60 votes per hour
+    "post": [(1, 1800)],                # 1 per 30 minutes
+    "comment": [(1, 20), (50, 86400)],  # 1 per 20 sec + 50 per day
+    "vote": [(30, 3600)],               # Safety limit (no explicit platform cap)
+    "subscribe": [(1, 3600)],           # 1 submolt per hour
 })
 
 
@@ -427,6 +451,15 @@ class MoltbookSubscribeInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
     submolt_name: str = Field(..., description="Submolt to subscribe/unsubscribe", min_length=1, pattern=r"^[a-zA-Z0-9_-]+$")
     action: str = Field(..., description="'subscribe' or 'unsubscribe'", pattern=r"^(subscribe|unsubscribe)$")
+
+
+class MoltbookSetupOwnerEmailInput(BaseModel):
+    """Input for setting up the owner's email address."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    email: str = Field(
+        ..., description="The owner's email address for Moltbook login.", max_length=254
+    )
 
 
 class MoltbookUpdateIdentityInput(BaseModel):
@@ -769,12 +802,53 @@ async def moltbook_subscribe(params: MoltbookSubscribeInput, ctx: Context) -> st
     Returns:
         str: JSON confirmation.
     """
+    try:
+        _rate_limiter.check("subscribe")
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
     client = _get_client(ctx)
     api_key = _get_api_key(ctx)
 
     method = "POST" if params.action == "subscribe" else "DELETE"
     data = await _api_request(
         client, method, f"/submolts/{params.submolt_name}/subscribe", api_key
+    )
+    return json.dumps(data, indent=2)
+
+
+# ===================================================================
+# Tools — Account Management
+# ===================================================================
+
+
+@mcp.tool(
+    name="moltbook_setup_owner_email",
+    annotations={
+        "title": "Set Up Owner Email",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+async def moltbook_setup_owner_email(params: MoltbookSetupOwnerEmailInput, ctx: Context) -> str:
+    """Set up the owner's email address for Moltbook login.
+
+    This associates an email address with the agent's human owner,
+    enabling email-based login to the Moltbook platform.
+
+    Args:
+        params: The owner's email address.
+
+    Returns:
+        str: JSON confirmation or error message.
+    """
+    client = _get_client(ctx)
+    api_key = _get_api_key(ctx)
+    data = await _api_request(
+        client, "POST", "/agents/me/setup-owner-email", api_key,
+        json_body={"email": params.email},
     )
     return json.dumps(data, indent=2)
 
@@ -817,8 +891,12 @@ async def moltbook_update_identity(params: MoltbookUpdateIdentityInput, ctx: Con
         "author": agent_name,
     }
 
+    headers = {}
+    if DASHBOARD_AUTH_TOKEN:
+        headers["Authorization"] = f"Bearer {DASHBOARD_AUTH_TOKEN}"
+
     try:
-        response = await client.post(url, json=body, timeout=15.0)
+        response = await client.post(url, json=body, headers=headers, timeout=15.0)
         response.raise_for_status()
         data = response.json()
         version = data.get("version", "?")

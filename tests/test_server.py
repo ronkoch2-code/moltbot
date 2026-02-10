@@ -406,3 +406,79 @@ class TestMoltbookUpdateIdentity:
                 change_summary="Valid summary here",
                 extra_field="not allowed",
             )
+
+
+# ===========================================================================
+# RateLimiter tests
+# ===========================================================================
+
+
+class TestRateLimiter:
+    """Tests for RateLimiter with multi-window support."""
+
+    def test_rate_limiter_post_correct(self):
+        """Post limit: 1 per 30 minutes, second post should be blocked."""
+        from server import RateLimiter
+
+        rl = RateLimiter({"post": [(1, 1800)]})
+        rl.check("post")  # First should succeed
+        with pytest.raises(ValueError, match="1 posts per 30 minutes"):
+            rl.check("post")
+
+    def test_rate_limiter_multi_window_comment_burst(self):
+        """Comment burst limit: 1 per 20 seconds enforced."""
+        from server import RateLimiter
+
+        rl = RateLimiter({"comment": [(1, 20), (50, 86400)]})
+        rl.check("comment")  # First should succeed
+        with pytest.raises(ValueError, match="1 comments per 20 seconds"):
+            rl.check("comment")  # Immediate second should fail (burst)
+
+    def test_rate_limiter_multi_window_comment_daily(self):
+        """Comment daily limit: 50 per day enforced."""
+        import time
+        from server import RateLimiter
+
+        rl = RateLimiter({"comment": [(1000, 1), (50, 86400)]})
+        # Populate 50 calls with timestamps spread across the day
+        now = time.monotonic()
+        rl.call_history["comment"] = [now - i * 100 for i in range(50)]
+        with pytest.raises(ValueError, match="50 comments per 1 day"):
+            rl.check("comment")
+
+    def test_rate_limiter_subscribe(self):
+        """Subscribe limit: 1 per hour enforced."""
+        from server import RateLimiter
+
+        rl = RateLimiter({"subscribe": [(1, 3600)]})
+        rl.check("subscribe")
+        with pytest.raises(ValueError, match="1 subscribes per 1 hour"):
+            rl.check("subscribe")
+
+    def test_rate_limiter_unknown_action_passes(self):
+        """Unknown actions should pass without error."""
+        from server import RateLimiter
+
+        rl = RateLimiter({"post": [(1, 1800)]})
+        rl.check("unknown_action")  # Should not raise
+
+    def test_rate_limiter_records_call(self):
+        """Successful check should record the call timestamp."""
+        from server import RateLimiter
+
+        rl = RateLimiter({"vote": [(30, 3600)]})
+        assert len(rl.call_history["vote"]) == 0
+        rl.check("vote")
+        assert len(rl.call_history["vote"]) == 1
+
+    def test_rate_limiter_format_window(self):
+        """Window formatting should produce human-readable strings."""
+        from server import RateLimiter
+
+        rl = RateLimiter({"x": [(1, 1)]})
+        assert rl._format_window(20) == "20 seconds"
+        assert rl._format_window(1) == "1 second"
+        assert rl._format_window(60) == "1 minute"
+        assert rl._format_window(1800) == "30 minutes"
+        assert rl._format_window(3600) == "1 hour"
+        assert rl._format_window(86400) == "1 day"
