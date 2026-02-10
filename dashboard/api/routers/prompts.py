@@ -2,13 +2,14 @@
 
 import math
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
+from dashboard.api.auth import require_auth
 from dashboard.api.database import get_db
 from dashboard.api.models import PaginatedPrompts, PromptCreateIn, PromptOut
 
-router = APIRouter(prefix="/api/prompts", tags=["prompts"])
+router = APIRouter(prefix="/api/prompts", tags=["prompts"], dependencies=[Depends(require_auth)])
 
 
 def _row_to_prompt(row) -> dict:

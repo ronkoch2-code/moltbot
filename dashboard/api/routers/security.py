@@ -2,8 +2,9 @@
 
 import math
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from dashboard.api.auth import require_auth
 from dashboard.api.database import get_db
 from dashboard.api.models import (
     BlockAuthorIn,
@@ -19,7 +20,7 @@ from dashboard.api.models import (
     UnblockAuthorIn,
 )
 
-router = APIRouter(prefix="/api/security", tags=["security"])
+router = APIRouter(prefix="/api/security", tags=["security"], dependencies=[Depends(require_auth)])
 
 
 @router.get("/events", response_model=PaginatedSecurityEvents)

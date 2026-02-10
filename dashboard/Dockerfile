@@ -10,6 +10,9 @@
 # -----------------------------------------------------------------------------
 FROM node:22-alpine AS webapp-builder
 
+ARG VITE_DASHBOARD_AUTH_TOKEN=""
+ENV VITE_DASHBOARD_AUTH_TOKEN=${VITE_DASHBOARD_AUTH_TOKEN}
+
 WORKDIR /build
 
 # Install dependencies (cached layer)

@@ -2,8 +2,9 @@
 
 import math
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from dashboard.api.auth import require_auth
 from dashboard.api.database import get_db
 from dashboard.api.models import (
     PaginatedRuns,
@@ -14,7 +15,7 @@ from dashboard.api.models import (
     ActionOut,
 )
 
-router = APIRouter(prefix="/api/runs", tags=["runs"])
+router = APIRouter(prefix="/api/runs", tags=["runs"], dependencies=[Depends(require_auth)])
 
 
 def _row_to_run(row, action_count: int = 0) -> dict:

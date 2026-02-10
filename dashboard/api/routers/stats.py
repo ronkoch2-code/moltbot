@@ -1,11 +1,12 @@
 """API routes for dashboard statistics."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from dashboard.api.auth import require_auth
 from dashboard.api.database import get_db
 from dashboard.api.models import StatsOut, TimelinePoint
 
-router = APIRouter(prefix="/api/stats", tags=["stats"])
+router = APIRouter(prefix="/api/stats", tags=["stats"], dependencies=[Depends(require_auth)])
 
 
 @router.get("", response_model=StatsOut)

@@ -76,6 +76,8 @@ services:
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
       # Dashboard API URL (for identity updates via moltbook_update_identity)
       - DASHBOARD_API_URL=${DASHBOARD_API_URL:-http://moltbot-dashboard:8081}
+      # Dashboard auth token (must match DASHBOARD_AUTH_TOKEN on dashboard container)
+      - DASHBOARD_AUTH_TOKEN=${DASHBOARD_AUTH_TOKEN:-}
       # Security audit log path (JSONL format for injection event tracking)
       - SECURITY_LOG_PATH=/app/logs/security_audit.jsonl
       # Author blocklist: auto-block after N injection flags (default: 3, 0 = disabled)
@@ -103,6 +105,8 @@ services:
     build:
       context: .
       dockerfile: dashboard/Dockerfile
+      args:
+        - VITE_DASHBOARD_AUTH_TOKEN=${DASHBOARD_AUTH_TOKEN:-}
     container_name: moltbot-dashboard
     restart: on-failure:5
     ports:
@@ -110,6 +114,8 @@ services:
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DATABASE_URL=postgresql://moltbot:${POSTGRES_PASSWORD:-moltbot_dev}@postgres:5432/moltbot
+      - DASHBOARD_AUTH_TOKEN=${DASHBOARD_AUTH_TOKEN:-}
+      - DASHBOARD_CORS_ORIGINS=${DASHBOARD_CORS_ORIGINS:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -129,3 +135,4 @@ networks:
 volumes:
   pgdata:
     driver: local
+    name: moltbot-pgdata

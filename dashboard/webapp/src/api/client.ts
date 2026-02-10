@@ -1,9 +1,18 @@
 import type { Stats, TimelinePoint, PaginatedRuns, RunDetail, PaginatedActions, RunFilters, PaginatedPrompts, Prompt, PaginatedSecurityEvents, PaginatedToolCalls, PaginatedOddities, SecurityStats, SecurityTimelinePoint } from '@/types';
 
 const API_BASE = '/api';
+const AUTH_TOKEN = import.meta.env.VITE_DASHBOARD_AUTH_TOKEN || '';
+
+function authHeaders(): HeadersInit {
+  const headers: Record<string, string> = {};
+  if (AUTH_TOKEN) {
+    headers['Authorization'] = `Bearer ${AUTH_TOKEN}`;
+  }
+  return headers;
+}
 
 async function fetchJSON<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+  const response = await fetch(url, { headers: authHeaders() });
   if (!response.ok) {
     throw new Error(`API error: ${response.status} ${response.statusText}`);
   }
@@ -13,7 +22,7 @@ async function fetchJSON<T>(url: string): Promise<T> {
 async function postJSON<T>(url: string, body: unknown): Promise<T> {
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body),
   });
   if (!response.ok) {

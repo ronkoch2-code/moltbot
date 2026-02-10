@@ -1,5 +1,7 @@
 """Pydantic models for heartbeat activity dashboard API."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -98,7 +100,7 @@ class RunCreateIn(BaseModel):
     agent_name: str
     script_variant: str | None = None
     run_number: int | None = None
-    raw_output: str | None = None
+    raw_output: str | None = Field(None, max_length=200_000)
 
 
 class RunUpdateIn(BaseModel):
@@ -108,19 +110,29 @@ class RunUpdateIn(BaseModel):
     duration_seconds: float | None = None
     exit_code: int | None = None
     status: str | None = None
-    summary: str | None = None
-    error_message: str | None = None
-    raw_output: str | None = None
+    summary: str | None = Field(None, max_length=5000)
+    error_message: str | None = Field(None, max_length=5000)
+    raw_output: str | None = Field(None, max_length=200_000)
 
 
 class ActionCreateIn(BaseModel):
     """Input for recording an action."""
 
-    action_type: str
+    action_type: Literal[
+        "browsed",
+        "commented",
+        "upvoted",
+        "downvoted",
+        "posted",
+        "subscribed",
+        "checked_status",
+        "checked_submolts",
+        "registered",
+    ]
     target_id: str | None = None
-    target_title: str | None = None
-    target_author: str | None = None
-    detail: str | None = None
+    target_title: str | None = Field(None, max_length=200)
+    target_author: str | None = Field(None, max_length=200)
+    detail: str | None = Field(None, max_length=1000)
     succeeded: bool = True
 
 
@@ -139,9 +151,9 @@ class PromptOut(BaseModel):
 class PromptCreateIn(BaseModel):
     """Input for creating a new prompt version."""
 
-    prompt_text: str
-    change_summary: str | None = None
-    author: str = "system"
+    prompt_text: str = Field(..., max_length=50_000)
+    change_summary: str | None = Field(None, max_length=500)
+    author: str = Field("system", max_length=100)
 
 
 class PaginatedPrompts(BaseModel):
@@ -271,14 +283,14 @@ class PaginatedBlockedAuthors(BaseModel):
 class BlockAuthorIn(BaseModel):
     """Input for manually blocking an author."""
 
-    author_name: str
-    reason: str | None = None
+    author_name: str = Field(..., max_length=200)
+    reason: str | None = Field(None, max_length=500)
 
 
 class UnblockAuthorIn(BaseModel):
     """Input for manually unblocking an author."""
 
-    author_name: str
+    author_name: str = Field(..., max_length=200)
 
 
 class HealthOut(BaseModel):

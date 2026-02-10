@@ -2,12 +2,13 @@
 
 import math
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from dashboard.api.auth import require_auth
 from dashboard.api.database import get_db
 from dashboard.api.models import ActionCreateIn, ActionOut, PaginatedActions
 
-router = APIRouter(tags=["actions"])
+router = APIRouter(tags=["actions"], dependencies=[Depends(require_auth)])
 
 
 @router.get("/api/runs/{run_id}/actions", response_model=list[ActionOut])

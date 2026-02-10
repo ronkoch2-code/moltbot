@@ -47,6 +47,19 @@ if [ "$NEEDS_DOCKER_RESTART" = true ]; then
     sleep 3
 fi
 
+echo "=== Backing up database ==="
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    # shellcheck disable=SC1091
+    DB_URL=$(grep -E '^DATABASE_URL=' "$SCRIPT_DIR/.env" | cut -d= -f2-)
+    if [ -n "$DB_URL" ]; then
+        DATABASE_URL="$DB_URL" python3 "$SCRIPT_DIR/scripts/backup_db.py" || echo "WARNING: Database backup failed (continuing with rebuild)"
+    else
+        echo "WARNING: DATABASE_URL not found in .env, skipping backup"
+    fi
+else
+    echo "WARNING: .env not found, skipping backup"
+fi
+
 echo "=== Stopping containers ==="
 docker compose down
 

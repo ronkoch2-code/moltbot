@@ -338,6 +338,16 @@ def record_run(
     conn = get_connection(database_url)
     try:
         cur = conn.cursor()
+
+        # Validate prompt_version_id exists (avoid FK violation if prompt was deleted)
+        if prompt_version_id is not None:
+            cur.execute(
+                "SELECT id FROM heartbeat_prompts WHERE id = %s",
+                (prompt_version_id,),
+            )
+            if cur.fetchone() is None:
+                prompt_version_id = None
+
         cur.execute(
             """
             INSERT INTO heartbeat_runs
