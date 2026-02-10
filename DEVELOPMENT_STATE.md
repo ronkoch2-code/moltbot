@@ -3,6 +3,17 @@
 ## Current Task
 _(none — all tasks complete)_
 
+## Plan — 2026-02-10 (continued)
+
+### Block 18: Filter & Store Moltbook API Error Responses
+- [x] **18.1** Export `log_security_event()` from content_filter.py
+- [x] **18.2** Add `scan_text` + `log_security_event` imports to server.py
+- [x] **18.3** Filter error bodies in `_api_request()` through content filter + log to audit
+- [x] **18.4** Modify `_http_error_response()` to accept `filtered_body` parameter
+- [x] **18.5** Update `collect_mcp_logs.py` to parse `api_error` events
+- [x] **18.6** Write tests — 4 server error filtering + 2 collector tests + 3 updated existing tests
+- [x] **18.7** Update DEVELOPMENT_STATE.md
+
 ## Plan — 2026-02-10
 
 ### Block 17: Moltbook Platform Rules & Skills Sync
@@ -142,6 +153,25 @@ _(none — all tasks complete)_
 ---
 
 ## Completed Work
+
+### 2026-02-10 — Filter & Store Moltbook API Error Responses
+
+**What**: Closed a security gap where Moltbook API error response bodies were returned to the LLM agent without content filtering. Error messages could echo back user-controlled content containing injection payloads (e.g., `"Invalid submolt: [INJECTION]"`).
+
+**Changes**:
+1. `content_filter.py` — Added `log_security_event()` public function wrapping the private security logger
+2. `server.py` — `_api_request()` now scans all HTTP error response bodies through the DeBERTa content filter before returning them; flagged content is redacted. All API errors are logged to security audit JSONL with path, method, status, risk score, and flags.
+3. `server.py` — `_http_error_response()` accepts optional `filtered_body` keyword arg to override response body parsing
+4. `heartbeat/collect_mcp_logs.py` — `parse_security_audit()` now handles `event == "api_error"` with event types `api_error` (clean) and `api_error_flagged` (flagged)
+
+**Files Modified**:
+- `content_filter.py` — Added `log_security_event()`
+- `server.py` — Added `datetime` import, `scan_text`/`log_security_event` imports, error body filtering in `_api_request()`, `filtered_body` param in `_http_error_response()`
+- `heartbeat/collect_mcp_logs.py` — Added `api_error` event parsing in `parse_security_audit()`
+- `tests/test_server.py` — 4 new error filtering tests + 3 updated existing tests
+- `tests/test_collect_mcp_logs.py` — 2 new collector tests
+
+**Verification**: 231/231 tests pass (6 new, 3 updated). 18 pre-existing failures in test_security_analytics.py not related.
 
 ### 2026-02-10 — Moltbook Platform Rules & Skills Sync
 

@@ -62,6 +62,12 @@ def _get_security_logger() -> logging.Logger:
             _security_logger = logger
     return _security_logger
 
+
+def log_security_event(event: dict) -> None:
+    """Write a structured event to the security audit JSONL log."""
+    _get_security_logger().info(json.dumps(event))
+
+
 # Configurable threshold via environment variable (default: 0.5)
 DEFAULT_THRESHOLD = 0.5
 

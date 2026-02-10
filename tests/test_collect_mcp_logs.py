@@ -85,6 +85,50 @@ class TestParseSecurityAudit:
         entry = {"event": "something_else", "timestamp": "2026-01-01"}
         assert parse_security_audit(json.dumps(entry)) is None
 
+    def test_parse_api_error_event(self):
+        """api_error events should be parsed with event_type 'api_error'."""
+        entry = {
+            "timestamp": "2026-02-10T12:00:00+00:00",
+            "event": "api_error",
+            "status_code": 404,
+            "path": "/posts/abc-123",
+            "method": "GET",
+            "flagged": False,
+            "risk_score": 0.0,
+            "flags": [],
+            "body_preview": "Not found",
+        }
+        result = parse_security_audit(json.dumps(entry))
+        assert result is not None
+        assert result["event_type"] == "api_error"
+        assert result["target_path"] == "/posts/abc-123"
+        assert result["risk_score"] == 0.0
+        # fields_affected should contain path and method+status
+        fields = json.loads(result["fields_affected"])
+        assert "/posts/abc-123" in fields
+        assert "GET 404" in fields
+
+    def test_parse_api_error_flagged_event(self):
+        """Flagged api_error events should get event_type 'api_error_flagged'."""
+        entry = {
+            "timestamp": "2026-02-10T12:00:00+00:00",
+            "event": "api_error",
+            "status_code": 400,
+            "path": "/posts",
+            "method": "POST",
+            "flagged": True,
+            "risk_score": 0.85,
+            "flags": ["Regex hard-block: /send your api_key/"],
+            "body_preview": "[REDACTED — blocked by filter]",
+        }
+        result = parse_security_audit(json.dumps(entry))
+        assert result is not None
+        assert result["event_type"] == "api_error_flagged"
+        assert result["risk_score"] == 0.85
+        assert result["flags"] is not None
+        flags = json.loads(result["flags"])
+        assert len(flags) == 1
+
 
 # ---------------------------------------------------------------------------
 # parse_auth_warning

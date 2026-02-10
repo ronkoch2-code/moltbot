@@ -127,7 +127,27 @@ def parse_security_audit(line: str) -> dict | None:
     except json.JSONDecodeError:
         return None
 
-    if entry.get("event") != "content_flagged":
+    event_name = entry.get("event")
+
+    if event_name == "api_error":
+        flags = entry.get("flags", [])
+        flagged = entry.get("flagged", False)
+        event_type = "api_error_flagged" if flagged else "api_error"
+        return {
+            "event_type": event_type,
+            "timestamp": entry.get("timestamp", datetime.now(timezone.utc).isoformat()),
+            "source_ip": None,
+            "post_id": None,
+            "author_name": None,
+            "submolt_name": None,
+            "risk_score": entry.get("risk_score"),
+            "flags": json.dumps(flags) if flags else None,
+            "fields_affected": json.dumps([entry.get("path", ""), f"{entry.get('method', '')} {entry.get('status_code', '')}"]),
+            "target_path": entry.get("path"),
+            "raw_log_line": line,
+        }
+
+    if event_name != "content_flagged":
         return None
 
     flags = entry.get("flags", [])

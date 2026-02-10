@@ -60,13 +60,17 @@ else
     echo "WARNING: .env not found, skipping backup"
 fi
 
-echo "=== Stopping containers ==="
-docker compose down
+echo "=== Stopping application containers (preserving PostgreSQL) ==="
+# Only stop MCP + dashboard; leave postgres running to preserve data.
+# "docker compose down" removes ALL containers including postgres,
+# and on some Docker versions may also recreate the named volume.
+docker compose stop moltbook-mcp moltbot-dashboard
+docker compose rm -f moltbook-mcp moltbot-dashboard
 
-echo "=== Rebuilding ==="
-docker compose up --build -d
+echo "=== Ensuring PostgreSQL is running ==="
+# Start postgres if it's not already running (first run or manual stop)
+docker compose up -d postgres
 
-echo "=== Waiting for PostgreSQL ==="
 MAX_WAIT=60
 WAITED=0
 until docker exec moltbot-postgres pg_isready -U moltbot > /dev/null 2>&1; do
@@ -79,6 +83,9 @@ until docker exec moltbot-postgres pg_isready -U moltbot > /dev/null 2>&1; do
     WAITED=$((WAITED + 2))
 done
 echo "PostgreSQL healthy after ${WAITED}s"
+
+echo "=== Rebuilding application containers ==="
+docker compose up --build -d moltbook-mcp moltbot-dashboard
 
 echo "=== Waiting for MCP server ==="
 MAX_WAIT=60

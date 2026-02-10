@@ -14,6 +14,7 @@ import logging
 import re
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from enum import Enum
 
@@ -22,7 +23,7 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator
 from mcp.server.fastmcp import FastMCP, Context
 from starlette.responses import JSONResponse
 
-from content_filter import filter_posts, filter_post, filter_comments
+from content_filter import filter_posts, filter_post, filter_comments, scan_text, log_security_event
 
 # ---------------------------------------------------------------------------
 # Logging configuration
@@ -145,7 +146,26 @@ async def _api_request(
         response.raise_for_status()
         return response.json()
     except httpx.HTTPStatusError as e:
-        return _http_error_response(e)
+        # Scan error response body through content filter
+        body_text = e.response.text[:500]
+        scan_result = scan_text(body_text) if body_text else {"clean": True, "flags": [], "risk_score": 0.0, "sanitised": ""}
+
+        # Log all API errors to security audit
+        log_security_event({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": "api_error",
+            "status_code": e.response.status_code,
+            "path": path,
+            "method": method,
+            "flagged": not scan_result["clean"],
+            "risk_score": scan_result["risk_score"],
+            "flags": scan_result["flags"],
+            "body_preview": scan_result["sanitised"][:200] if not scan_result["clean"] else body_text[:200],
+        })
+
+        # Pass filtered body if flagged
+        filtered_body = scan_result["sanitised"] if not scan_result["clean"] else None
+        return _http_error_response(e, filtered_body=filtered_body)
     except httpx.TimeoutException:
         return {"error": "Request to Moltbook API timed out. Try again shortly."}
     except Exception as e:
@@ -153,14 +173,16 @@ async def _api_request(
         return {"error": "An unexpected error occurred while communicating with Moltbook."}
 
 
-def _http_error_response(e: httpx.HTTPStatusError) -> Dict[str, Any]:
+def _http_error_response(e: httpx.HTTPStatusError, *, filtered_body: str | None = None) -> Dict[str, Any]:
     """Convert HTTP errors into actionable messages."""
     status = e.response.status_code
-    body = ""
-    try:
-        body = e.response.json()
-    except Exception:
-        body = e.response.text[:500]
+    if filtered_body is not None:
+        body = filtered_body
+    else:
+        try:
+            body = e.response.json()
+        except Exception:
+            body = e.response.text[:500]
     logger.warning(f"HTTP {status} from Moltbook API: {body}")
     messages = {
         401: "Authentication failed. Check your MOLTBOOK_API_KEY.",
