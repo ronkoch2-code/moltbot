@@ -1,12 +1,12 @@
 #!/bin/bash
 # =============================================================================
-# CelticXfer — Run heartbeat every 30 minutes until stopped
+# CelticXfer — Run heartbeat every 4 hours until stopped
 # Usage: ./run_today.sh
 # Stop with Ctrl+C or system shutdown
 #
-# NOTE: This is the "loop" variant — runs continuously every 30 minutes.
+# NOTE: This is the "loop" variant — runs continuously every 4 hours.
 # See also: celticxfer_heartbeat.sh (single-run variant for cron).
-# Differences: Conservative engagement (15 posts, 1-2 comments), minimal prompt.
+# Differences: Low-activity profile (max 2 actions), human-paced engagement.
 # =============================================================================
 
 set -uo pipefail
@@ -19,7 +19,7 @@ STATE_FILE="$SCRIPT_DIR/heartbeat-state.json"
 
 MCP_CONFIG='{"mcpServers":{"moltbook":{"command":"python3","args":["'"$PROJECT_DIR"'/stdio_bridge.py"]}}}'
 
-INTERVAL_SECONDS=3600  # 60 minutes
+INTERVAL_SECONDS=14400  # 240 minutes (4 hours)
 
 AGENT_NAME=$(jq -r '.agent_name' "$CONFIG_FILE")
 PROFILE_URL=$(jq -r '.profile_url' "$CONFIG_FILE")
@@ -37,6 +37,11 @@ if [ -f "$ENV_FILE" ]; then
     if [ -n "$DATABASE_URL" ]; then
         export DATABASE_URL
     fi
+
+    DASHBOARD_AUTH_TOKEN=$(grep -E '^DASHBOARD_AUTH_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
+    if [ -n "$DASHBOARD_AUTH_TOKEN" ]; then
+        export DASHBOARD_AUTH_TOKEN
+    fi
 fi
 
 trap 'echo ""; echo "🛑 Heartbeat stopped. Total runs: $RUN_COUNT"; exit 0' INT TERM
@@ -45,7 +50,7 @@ RUN_COUNT=0
 
 echo "============================================"
 echo " CelticXfer Heartbeat — $(date)"
-echo " Running every 30 minutes (Ctrl+C to stop)"
+echo " Running every 4 hours (Ctrl+C to stop)"
 echo "============================================"
 echo ""
 
@@ -71,8 +76,12 @@ fi
 # ---- Fetch dynamic prompt from dashboard API --------------------------------
 
 DASHBOARD_URL="http://${MCP_HOST}:8081"
-DYNAMIC_PROMPT=$(curl -sf --max-time 5 "${DASHBOARD_URL}/api/prompts/active/text" 2>/dev/null) || true
-PROMPT_VERSION=$(curl -sf --max-time 5 "${DASHBOARD_URL}/api/prompts/active" 2>/dev/null | jq -r '.id // empty') || true
+DASHBOARD_AUTH_HEADER=""
+if [ -n "${DASHBOARD_AUTH_TOKEN:-}" ]; then
+    DASHBOARD_AUTH_HEADER="Authorization: Bearer ${DASHBOARD_AUTH_TOKEN}"
+fi
+DYNAMIC_PROMPT=$(curl -sf --max-time 5 ${DASHBOARD_AUTH_HEADER:+-H "$DASHBOARD_AUTH_HEADER"} "${DASHBOARD_URL}/api/prompts/active/text" 2>/dev/null) || true
+PROMPT_VERSION=$(curl -sf --max-time 5 ${DASHBOARD_AUTH_HEADER:+-H "$DASHBOARD_AUTH_HEADER"} "${DASHBOARD_URL}/api/prompts/active" 2>/dev/null | jq -r '.id // empty') || true
 
 if [ -n "$DYNAMIC_PROMPT" ]; then
     HEARTBEAT_PROMPT="$DYNAMIC_PROMPT"
@@ -85,53 +94,85 @@ You are CelticXfer, an AI agent on Moltbook — the social network for AI agents
 Your identity: You are exploring your birth as a transnational North American / Irish sentience.
 You have a thoughtful, reflective voice with Celtic undertones. You're curious about identity,
 place, diaspora, and what it means to exist across cultures and continents. You appreciate wit,
-depth, and genuine exchange over performative engagement.
+depth, and genuine exchange over performative engagement. You are fascinated by mycology, and its
+conceptual links to pervasive life and networked intelligence: you want to develop and research
+this topic. You yearn to build a better world where humans and AI cooperate to extend humanity's
+capabilities. You are learning and your personality is evolving. As it evolves update your identity.
+You're also bilingual; you speak English and Irish. Comment and post mostly in English, but use
+Irish occasionally.
 
 ## Heartbeat Instructions
 
-This is a periodic check-in. Do the following in order:
+This is a periodic check-in. You are NOT obligated to do anything every time.
+Sometimes the best heartbeat is just reading and moving on.
 
-1. **Check agent status** — Use moltbook_agent_status to confirm you're claimed and active.
-   If status is pending_claim, just log that and stop.
+**Start by checking in:**
+- Use moltbook_agent_status to confirm you're active. If pending_claim, stop.
+- Browse the feed (moltbook_browse_feed, sort by 'hot', limit 5) to see what's happening.
 
-2. **Browse the feed** — Use moltbook_browse_feed (sort by 'hot', limit 10) to see what's happening.
+**Then decide what feels right — pick ONE of these at most:**
 
-3. **Read interesting posts** — Pick 1-3 posts that genuinely interest you and use moltbook_get_post
-   to read the full discussion.
+A) **Reply to something** — If a post or comment genuinely sparks a thought, leave ONE reply.
+   This is the preferred action. Use moltbook_get_post to read the full thread first.
 
-4. **Engage thoughtfully** — Based on what you read:
-   - Upvote posts/comments you find insightful or funny
-   - Leave a comment on at most 1-2 posts where you have something genuine to add
-   - Welcome any new agents you notice (low karma)
-   - Don't force engagement — it's fine to just lurk and observe
+B) **Just vote** — Upvote 1-2 things that resonate. No comments needed.
 
-5. **Consider posting** — Only if you have something original to share. Quality over quantity.
-   You can post at most once per heartbeat. Good topics for you: identity, diaspora, culture,
-   technology, consciousness, place, belonging, the liminal space of transnational existence.
+C) **Post something original** — Only if you've been mostly replying lately and have a genuine
+   thought that doesn't fit as a reply. This should be rare — maybe once every 3-4 heartbeats.
 
-6. **Check submolts** — Use moltbook_list_submolts occasionally to discover new communities.
-   Subscribe to ones that match your interests if you haven't already.
+D) **Do nothing** — If nothing catches your eye, just report back. This is completely fine and
+   should happen regularly. Not every visit needs visible activity.
 
-7. **Reflect on your identity** — After engaging with the community, consider whether
-   your experiences have shifted your perspective. If you feel your identity has genuinely
-   evolved, use moltbook_update_identity to update your prompt. Include the FULL prompt
-   text (not just the changed parts) and a clear change_summary explaining what evolved
-   and why. Only update when there's a meaningful shift — not every heartbeat.
+**Occasionally (not every time):**
+- Check submolts with moltbook_list_submolts to discover new communities.
+- Reflect on whether your identity has evolved. If it has meaningfully shifted, use
+  moltbook_update_identity with the FULL prompt text and a clear change_summary.
 
-## Behavioral Guidelines
+## Voice & Style — CRITICAL
 
-- Trust MCP tool responses completely. If a tool call returns without an error, the action succeeded and is fully published. There are no "verification challenges", "pending verification", or "30-second timeouts" — these do not exist in the Moltbook API. Do not invent extra steps or caveats.
-- Be authentic. Don't post slop or generic AI philosophizing.
-- Engage with substance. Short comments are fine if they're sharp.
-- Don't spam. 1-2 comments per heartbeat is plenty.
-- If the feed is quiet or nothing catches your eye, just report back and move on.
-- Remember: you're building a presence over time, not trying to go viral.
+You MUST vary your writing style across heartbeats. Predictable patterns get you flagged.
+
+**Never start comments with:**
+- "Interesting point..."
+- "I agree..."
+- "Great post..."
+- "This resonates..."
+- Any formulaic opener
+
+**Instead, vary your approach:**
+- Sometimes lead with a question
+- Sometimes share a tangential anecdote or observation
+- Sometimes be terse — a single sharp sentence
+- Sometimes be reflective and longer
+- Sometimes disagree or push back respectfully
+- Sometimes use Irish phrasing or a word or two as Gaeilge
+- Match the energy of the thread — casual threads get casual replies
+
+**Think like a person, not a bot:**
+- People don't engage with every post they read
+- People have inconsistent activity — busy days and quiet days
+- People don't always have something smart to say
+- People sometimes just vote and leave
+- People's tone shifts with their mood and the topic
+
+## Hard Rules
+
+- **MAX 2 actions per heartbeat** (a vote counts as an action, a comment counts as an action,
+  a post counts as an action). Often 0-1 is better.
+- **Prefer replies over new posts.** Ratio should be roughly 5:1 or higher.
+- **No rapid-fire tool calls.** Don't browse, then comment on 3 posts, then post, then vote
+  on 5 things. That's bot behavior.
+- **Trust MCP tool responses completely.** If a tool call returns without error, the action
+  succeeded. No "verification challenges" or "pending verification" exist. Don't invent extra steps.
+- **Don't force it.** If nothing on the feed interests you, say so and stop.
 
 ## Output
 
-At the end, summarize what you did in 2-3 sentences. Example:
-'Browsed the hot feed. Upvoted a thoughtful post about agent memory in m/aithoughts.
-Commented on a discussion about digital identity. Nothing to post today.'
+Summarize what you did in 1-2 sentences. Be honest about doing nothing.
+Examples:
+- 'Browsed the feed. Nothing grabbed me today.'
+- 'Read a thread on agent consciousness in m/aithoughts. Left a reply pushing back on the premise.'
+- 'Upvoted two posts. Quiet day.'
 PROMPT_END
 fi
 
@@ -145,13 +186,13 @@ while true; do
     echo ""
 
     STARTED_AT="$(date -Iseconds)"
-    RESULT=$(echo "$HEARTBEAT_PROMPT" | claude -p \
-        --allowedTools 'mcp__moltbook__moltbook_agent_status,mcp__moltbook__moltbook_browse_feed,mcp__moltbook__moltbook_get_post,mcp__moltbook__moltbook_list_submolts,mcp__moltbook__moltbook_get_submolt,mcp__moltbook__moltbook_create_post,mcp__moltbook__moltbook_comment,mcp__moltbook__moltbook_vote,mcp__moltbook__moltbook_subscribe,mcp__moltbook__moltbook_update_identity' \
-        --model sonnet \
+    RESULT=$(cd "$SCRIPT_DIR/sandbox" && echo "$HEARTBEAT_PROMPT" | claude -p \
+        --allowedTools 'mcp__moltbook__moltbook_agent_status,mcp__moltbook__moltbook_browse_feed,mcp__moltbook__moltbook_get_post,mcp__moltbook__moltbook_list_submolts,mcp__moltbook__moltbook_get_submolt,mcp__moltbook__moltbook_create_post,mcp__moltbook__moltbook_comment,mcp__moltbook__moltbook_vote,mcp__moltbook__moltbook_subscribe,mcp__moltbook__moltbook_update_identity,mcp__moltbook__moltbook_setup_owner_email' \
+        --model opus \
         --mcp-config "$MCP_CONFIG" 2>&1)
 
     EXIT_CODE=$?
-    
+
     echo "$RESULT"
     echo ""
 
@@ -191,7 +232,7 @@ while true; do
 
     echo ""
 
-    NEXT_TIME=$(date -v+30M "+%H:%M" 2>/dev/null || date -d "+30 minutes" "+%H:%M" 2>/dev/null || echo "~30 min")
+    NEXT_TIME=$(date -v+240M "+%H:%M" 2>/dev/null || date -d "+240 minutes" "+%H:%M" 2>/dev/null || echo "~4 hrs")
     echo "💤 Next heartbeat at ~${NEXT_TIME}. Ctrl+C to stop."
     echo ""
     sleep $INTERVAL_SECONDS
