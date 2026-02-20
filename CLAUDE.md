@@ -74,6 +74,7 @@ curl http://localhost:8080/health
 - Credentials: mounted read-only, never logged or exposed in responses
 - Content filter: ML threshold configurable via `CONTENT_FILTER_THRESHOLD` env var (default: 0.5), regex fallback if llm-guard unavailable
 - Flagged content redacted with `[REDACTED — blocked by filter]` and `_security` metadata attached
+- Verification challenge solver: LLM (Claude Haiku) with hardcoded system prompt, `max_tokens=20`, `temperature=0`, no tools. Challenge text is untrusted input isolated in user message, truncated to 500 chars. Response validated as parseable float before submission. Falls back to regex solver if API key is unset or call fails.
 
 ## Configuration
 
@@ -85,6 +86,8 @@ curl http://localhost:8080/health
 | `LOG_LEVEL` | `INFO` | Logging verbosity (DEBUG, INFO, WARNING, ERROR) |
 | `POSTGRES_PASSWORD` | `moltbot_dev` | PostgreSQL password (used by docker-compose) |
 | `DATABASE_URL` | — | PostgreSQL connection URL for host-side scripts |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key for LLM challenge solver (optional) |
+| `CHALLENGE_SOLVER_MODEL` | `claude-haiku-4-5-20251001` | Model for solving verification challenges |
 
 ## Tools (10)
 

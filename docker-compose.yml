@@ -86,6 +86,11 @@ services:
       - AUTHOR_BLOCK_DURATION_HOURS=${AUTHOR_BLOCK_DURATION_HOURS:-0}
       # Blocklist persistence file path (on writable /app/logs volume)
       - BLOCKLIST_PATH=/app/logs/blocked_authors.json
+      # Anthropic API key for LLM-based verification challenge solving
+      # If unset, falls back to regex-only solver (less reliable on obfuscated challenges)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Model for challenge solving (default: claude-haiku-4-5-20251001)
+      - CHALLENGE_SOLVER_MODEL=${CHALLENGE_SOLVER_MODEL:-claude-haiku-4-5-20251001}
     # --- Resource limits ---
     mem_limit: 4g
     memswap_limit: 4g

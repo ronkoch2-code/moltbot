@@ -17,7 +17,9 @@ from server import (
     _words_to_number,
     _extract_number,
     _normalize_challenge_text,
+    _solve_challenge_regex,
     _solve_challenge,
+    _solve_challenge_llm,
     _auto_verify,
     MOLTBOOK_API_BASE,
 )
@@ -668,49 +670,49 @@ class TestExtractNumber:
         assert _extract_number("what is the total?") is None
 
 
-class TestSolveChallenge:
-    """Tests for _solve_challenge() — end-to-end challenge solving."""
+class TestSolveChallengeRegex:
+    """Tests for _solve_challenge_regex() — regex-based challenge solving."""
 
     def test_addition_word_numbers(self):
         challenge = (
             "A lobsters claw exerts thirty two newtons + "
             "another claw exerts sixteen newtons, what is the total?"
         )
-        assert _solve_challenge(challenge) == "48.00"
+        assert _solve_challenge_regex(challenge) == "48.00"
 
     def test_addition_digit_numbers(self):
         challenge = "A crab weighs 15 grams + another crab weighs 25 grams, total?"
-        assert _solve_challenge(challenge) == "40.00"
+        assert _solve_challenge_regex(challenge) == "40.00"
 
     def test_subtraction(self):
         challenge = "A lobster has fifty claws - it loses twelve claws, how many remain?"
-        assert _solve_challenge(challenge) == "38.00"
+        assert _solve_challenge_regex(challenge) == "38.00"
 
     def test_multiplication(self):
         challenge = "A lobster has 4 legs * each leg has 3 segments, total segments?"
-        assert _solve_challenge(challenge) == "12.00"
+        assert _solve_challenge_regex(challenge) == "12.00"
 
     def test_division(self):
         challenge = "A tank has 100 liters / shared among 4 lobsters, each gets?"
-        assert _solve_challenge(challenge) == "25.00"
+        assert _solve_challenge_regex(challenge) == "25.00"
 
     def test_mixed_word_and_digit(self):
         challenge = (
             "A lobsters claw exerts twenty newtons + "
             "another claw exerts 15 newtons, what is the total?"
         )
-        assert _solve_challenge(challenge) == "35.00"
+        assert _solve_challenge_regex(challenge) == "35.00"
 
     def test_no_operator_returns_none(self):
-        assert _solve_challenge("How many lobsters are there?") is None
+        assert _solve_challenge_regex("How many lobsters are there?") is None
 
     def test_empty_returns_none(self):
-        assert _solve_challenge("") is None
-        assert _solve_challenge(None) is None
+        assert _solve_challenge_regex("") is None
+        assert _solve_challenge_regex(None) is None
 
     def test_decimal_result(self):
         challenge = "A lobster weighs 10 grams / split into 3 parts, each weighs?"
-        result = _solve_challenge(challenge)
+        result = _solve_challenge_regex(challenge)
         assert result == "3.33"
 
     def test_obfuscated_lobster_challenge(self):
@@ -719,7 +721,7 @@ class TestSolveChallenge:
             "A] LoB-stEr] ClAw^ ExErTs- ThIrTy] FiVe~ NeW/ToNs, "
             "Um BuT^ MoLt-InG ReDuCeS| FoRce- By< SeVeN> , WhAt^ ReMaInS?"
         )
-        assert _solve_challenge(challenge) == "28.00"
+        assert _solve_challenge_regex(challenge) == "28.00"
 
     def test_narrative_op_with_intervening_words(self):
         """Narrative operators with nouns between verb and preposition."""
@@ -727,26 +729,32 @@ class TestSolveChallenge:
             "A claw exerts fifty newtons but molting "
             "decreases its strength by ten, what remains?"
         )
-        assert _solve_challenge(challenge) == "40.00"
+        assert _solve_challenge_regex(challenge) == "40.00"
 
     def test_doubled_unary(self):
         """Unary 'doubled' operator should work without a right operand."""
         challenge = "A lobster weighing fifteen newtons doubled"
-        assert _solve_challenge(challenge) == "30.00"
+        assert _solve_challenge_regex(challenge) == "30.00"
 
     def test_halved_unary(self):
         """Unary 'halved' operator should work without a right operand."""
         challenge = "A force of forty newtons halved"
-        assert _solve_challenge(challenge) == "20.00"
+        assert _solve_challenge_regex(challenge) == "20.00"
 
     def test_narrative_divided_by(self):
         """'divided by' narrative operator should work."""
         challenge = "A tank of 100 liters divided by 4 lobsters, each gets?"
-        assert _solve_challenge(challenge) == "25.00"
+        assert _solve_challenge_regex(challenge) == "25.00"
 
 
 class TestAutoVerify:
     """Tests for _auto_verify() — integration with Moltbook /verify endpoint."""
+
+    @pytest.fixture(autouse=True)
+    def disable_llm_solver(self):
+        """Disable LLM solver to test regex path in isolation."""
+        with patch("server._solve_challenge_llm", new_callable=AsyncMock, return_value=None):
+            yield
 
     @pytest.mark.asyncio
     async def test_no_challenge_passes_through(self):
@@ -842,6 +850,12 @@ class TestAutoVerify:
 class TestApiRequestWithVerification:
     """Tests for _api_request() integration with auto-verification."""
 
+    @pytest.fixture(autouse=True)
+    def disable_llm_solver(self):
+        """Disable LLM solver to test regex path in isolation."""
+        with patch("server._solve_challenge_llm", new_callable=AsyncMock, return_value=None):
+            yield
+
     @pytest.mark.asyncio
     async def test_post_with_challenge_auto_verifies(self, httpx_mock):
         """POST requests returning a challenge should auto-verify."""
@@ -919,3 +933,159 @@ class TestNormalizeChallengeText:
         """Hyphen between spaces (minus sign) should be preserved."""
         result = _normalize_challenge_text("ten - five")
         assert " - " in result
+
+
+# ===========================================================================
+# LLM challenge solver tests
+# ===========================================================================
+
+
+class TestSolveChallengeLLM:
+    """Tests for _solve_challenge_llm() — LLM-based challenge solving."""
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_api_key(self):
+        """Should return None when ANTHROPIC_API_KEY is not set."""
+        with patch("server.ANTHROPIC_API_KEY", ""):
+            with patch("server._anthropic_client", None):
+                result = await _solve_challenge_llm("thirty five + ten")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_sdk_not_installed(self):
+        """Should return None when anthropic package is not available."""
+        with patch("server.anthropic", None):
+            with patch("server._anthropic_client", None):
+                result = await _solve_challenge_llm("thirty five + ten")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_successful_solve(self):
+        """Should return formatted answer from LLM response."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="45.00")]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("server._get_anthropic_client", return_value=mock_client):
+            result = await _solve_challenge_llm("thirty five + ten")
+
+        assert result == "45.00"
+        mock_client.messages.create.assert_called_once()
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["max_tokens"] == 20
+        assert call_kwargs["temperature"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_handles_error_response(self):
+        """Should return None when LLM returns ERROR."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="ERROR")]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("server._get_anthropic_client", return_value=mock_client):
+            result = await _solve_challenge_llm("what color is a lobster?")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_handles_non_numeric_response(self):
+        """Should return None when LLM returns text instead of a number."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="I cannot solve this")]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("server._get_anthropic_client", return_value=mock_client):
+            result = await _solve_challenge_llm("ambiguous challenge")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_handles_api_exception(self):
+        """Should return None and not raise when the API call fails."""
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(
+            side_effect=Exception("API connection failed")
+        )
+
+        with patch("server._get_anthropic_client", return_value=mock_client):
+            result = await _solve_challenge_llm("thirty five + ten")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_truncates_long_challenges(self):
+        """Should truncate challenges longer than 500 chars."""
+        long_challenge = "x" * 1000
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="42.00")]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("server._get_anthropic_client", return_value=mock_client):
+            result = await _solve_challenge_llm(long_challenge)
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        sent_content = call_kwargs["messages"][0]["content"]
+        assert len(sent_content) == 500
+        assert result == "42.00"
+
+    @pytest.mark.asyncio
+    async def test_extracts_number_from_noisy_response(self):
+        """Should extract the number even if LLM includes minor whitespace."""
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=" 105.00 ")]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with patch("server._get_anthropic_client", return_value=mock_client):
+            result = await _solve_challenge_llm("lobster force challenge")
+
+        assert result == "105.00"
+
+
+class TestSolveChallengeIntegration:
+    """Tests for the async _solve_challenge() — LLM with regex fallback."""
+
+    @pytest.mark.asyncio
+    async def test_uses_llm_when_available(self):
+        """Should use LLM solver when Anthropic client is available."""
+        with patch("server._solve_challenge_llm", new_callable=AsyncMock, return_value="45.00"):
+            result = await _solve_challenge("thirty five + ten")
+        assert result == "45.00"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_regex_when_llm_unavailable(self):
+        """Should fall back to regex when LLM returns None."""
+        with patch("server._solve_challenge_llm", new_callable=AsyncMock, return_value=None):
+            result = await _solve_challenge(
+                "A claw has 10 newtons + another has 5 newtons, total?"
+            )
+        assert result == "15.00"
+
+    @pytest.mark.asyncio
+    async def test_empty_returns_none(self):
+        """Empty input should return None without calling either solver."""
+        result = await _solve_challenge("")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_none_returns_none(self):
+        """None input should return None."""
+        result = await _solve_challenge(None)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_both_fail_returns_none(self):
+        """Should return None when both LLM and regex fail."""
+        with patch("server._solve_challenge_llm", new_callable=AsyncMock, return_value=None):
+            result = await _solve_challenge("What color is a lobster?")
+        assert result is None

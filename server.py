@@ -23,6 +23,11 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator
 from mcp.server.fastmcp import FastMCP, Context
 from starlette.responses import JSONResponse
 
+try:
+    import anthropic
+except ImportError:
+    anthropic = None  # type: ignore[assignment]
+
 from content_filter import filter_posts, filter_post, filter_comments, scan_text, log_security_event
 
 # ---------------------------------------------------------------------------
@@ -49,6 +54,8 @@ CREDENTIALS_PATH = os.environ.get(
 )
 SAFE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 MCP_AUTH_TOKEN = os.environ.get("MCP_AUTH_TOKEN", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+CHALLENGE_SOLVER_MODEL = os.environ.get("CHALLENGE_SOLVER_MODEL", "claude-haiku-4-5-20251001")
 
 logger = logging.getLogger("moltbook_mcp")
 
@@ -385,8 +392,8 @@ def _match_narrative_op(
     return None, None
 
 
-def _solve_challenge(challenge_text: str) -> str | None:
-    """Parse a lobster math challenge and return the answer with 2 decimal places.
+def _solve_challenge_regex(challenge_text: str) -> str | None:
+    """Parse a lobster math challenge using regex and return the answer.
 
     Handles both symbolic operators ('+', '-') and narrative operators
     ('reduces by', 'adds', etc.) in potentially obfuscated text.
@@ -449,7 +456,142 @@ def _solve_challenge(challenge_text: str) -> str | None:
         result = op_func(left_num, right_num)
 
     answer = f"{result:.2f}"
-    logger.info(f"Challenge solved: {left_num} op {right_num} = {answer}")
+    logger.info(f"Challenge solved (regex): {left_num} op {right_num} = {answer}")
+    return answer
+
+
+# ---------------------------------------------------------------------------
+# LLM-based challenge solver (Claude Haiku)
+# ---------------------------------------------------------------------------
+
+_CHALLENGE_SOLVER_PROMPT = (
+    "You are a math solver. You receive a math word problem that may be "
+    "obfuscated with random capitalization, special characters, or creative "
+    "narrative framing. Your job is to:\n"
+    "1. Interpret the narrative to identify the numbers and mathematical operation\n"
+    "2. Compute the result\n"
+    "3. Return ONLY the numeric answer with exactly 2 decimal places\n\n"
+    "Examples:\n"
+    "- 'A lobster claw exerts thirty five newtons + another fifteen' → '50.00'\n"
+    "- 'A force of forty newtons halved' → '20.00'\n"
+    "- 'ThIrTy FiVe NeWtOnS reduced by SeVeN' → '28.00'\n\n"
+    "Rules:\n"
+    "- Return ONLY the number, nothing else\n"
+    "- Always use exactly 2 decimal places\n"
+    "- If you cannot determine the answer, return 'ERROR'\n"
+    "- Do not explain your reasoning\n"
+    "- Do not include units, words, or any other text"
+)
+
+# Lazy-initialized Anthropic client (created on first use)
+_anthropic_client: Optional["anthropic.AsyncAnthropic"] = None  # type: ignore[name-defined]
+
+
+def _get_anthropic_client() -> "anthropic.AsyncAnthropic | None":
+    """Get or create the Anthropic async client. Returns None if unavailable."""
+    global _anthropic_client
+    if anthropic is None or not ANTHROPIC_API_KEY:
+        return None
+    if _anthropic_client is None:
+        _anthropic_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    return _anthropic_client
+
+
+async def _solve_challenge_llm(challenge_text: str) -> str | None:
+    """Solve a verification challenge using Claude Haiku.
+
+    Sends the challenge text to a small, fast LLM with a tightly constrained
+    prompt that asks for only a numeric answer. The challenge text is treated
+    as untrusted input and isolated in the user message.
+
+    Args:
+        challenge_text: The raw challenge text from Moltbook's API.
+
+    Returns:
+        The answer as a string with 2 decimal places, or None if the LLM
+        could not solve it or the API call failed.
+    """
+    client = _get_anthropic_client()
+    if client is None:
+        logger.debug("Anthropic client unavailable — skipping LLM solver")
+        return None
+
+    # Truncate excessively long challenges (defense against payload inflation)
+    sanitized_challenge = challenge_text[:500]
+
+    try:
+        response = await client.messages.create(
+            model=CHALLENGE_SOLVER_MODEL,
+            max_tokens=20,
+            temperature=0.0,
+            system=_CHALLENGE_SOLVER_PROMPT,
+            messages=[
+                {"role": "user", "content": sanitized_challenge},
+            ],
+        )
+
+        answer_text = response.content[0].text.strip()
+        logger.info(f"LLM solver raw response: '{answer_text}'")
+
+        if answer_text == "ERROR":
+            logger.warning("LLM solver returned ERROR — challenge may be ambiguous")
+            return None
+
+        # Validate: must contain a parseable float (defense against injection)
+        number_match = re.search(r"-?\d+\.?\d*", answer_text)
+        if not number_match:
+            logger.warning(f"LLM solver returned non-numeric response: '{answer_text}'")
+            return None
+
+        result = float(number_match.group())
+        answer = f"{result:.2f}"
+        logger.info(f"LLM solver answer: {answer}")
+        return answer
+
+    except Exception as e:
+        logger.warning(f"LLM solver failed: {type(e).__name__}: {e}")
+        return None
+
+
+async def _solve_challenge(challenge_text: str) -> str | None:
+    """Solve a verification challenge, trying LLM first with regex fallback.
+
+    Strategy:
+    1. If Anthropic API key is configured, try the LLM solver (Claude Haiku)
+    2. If LLM fails or is unavailable, fall back to regex-based solver
+    3. Return None if neither can solve it
+
+    Args:
+        challenge_text: The raw challenge text from Moltbook's API.
+
+    Returns:
+        The answer as a string with 2 decimal places, or None.
+    """
+    if not challenge_text:
+        return None
+
+    # Phase 1: Try LLM solver
+    answer = await _solve_challenge_llm(challenge_text)
+    if answer is not None:
+        log_security_event({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": "challenge_solved_by_llm",
+            "model": CHALLENGE_SOLVER_MODEL,
+            "answer": answer,
+            "challenge_preview": challenge_text[:200],
+        })
+        return answer
+
+    # Phase 2: Fall back to regex solver
+    logger.info("LLM solver unavailable or failed — trying regex solver")
+    answer = _solve_challenge_regex(challenge_text)
+    if answer is not None:
+        log_security_event({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": "challenge_solved_by_regex",
+            "answer": answer,
+            "challenge_preview": challenge_text[:200],
+        })
     return answer
 
 
@@ -494,7 +636,7 @@ async def _auto_verify(
         "verification_code": verification_code,
     })
 
-    answer = _solve_challenge(challenge_text)
+    answer = await _solve_challenge(challenge_text)
     if answer is None:
         logger.error(f"Failed to solve verification challenge: {challenge_text}")
         log_security_event({

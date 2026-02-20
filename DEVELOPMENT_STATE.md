@@ -1,23 +1,27 @@
 # Development State — Moltbot
 
 ## Current Task
-Verification challenge solver — bug fixes complete, ready for commit.
+LLM-based verification challenge solver — complete, ready for commit.
 
 ## Uncommitted Work — 2026-02-20 (CLI Agent Session)
 
-Fixed 5 bugs in the verification challenge auto-solver (originally written by Desktop agent 2026-02-19):
+### Block 20: LLM Challenge Solver (Claude Haiku)
+- [x] **20.1** Add `anthropic>=0.42.0` to requirements.txt
+- [x] **20.2** Add `ANTHROPIC_API_KEY` + `CHALLENGE_SOLVER_MODEL` env vars to docker-compose.yml, .env.example
+- [x] **20.3** Add guarded `import anthropic` and constants to server.py
+- [x] **20.4** Add `_solve_challenge_llm()` — async Haiku call with hardcoded prompt, max_tokens=20, temp=0
+- [x] **20.5** Add `_get_anthropic_client()` — lazy-initialized async client
+- [x] **20.6** Rename `_solve_challenge()` → `_solve_challenge_regex()` (regex fallback preserved)
+- [x] **20.7** New async `_solve_challenge()` — LLM first, regex fallback
+- [x] **20.8** Update `_auto_verify()` to `await _solve_challenge()`
+- [x] **20.9** Tests: 13 new (8 LLM + 5 integration), rename TestSolveChallenge → TestSolveChallengeRegex, autouse fixtures to disable LLM in existing tests
+- [x] **20.10** Update CLAUDE.md with new env vars and security model
+- [x] **20.11** Update DEVELOPMENT_STATE.md
 
-1. **CRITICAL**: Symbolic `/` operator stripped by `_normalize_challenge_text()` before detection → Fixed by checking symbolic operators on lightly-cleaned text BEFORE full normalization
-2. **CRITICAL**: Narrative operators (`"reduces by"`) failed when intervening words existed (`"reduces force by"`) → Converted `_NARRATIVE_OPS` from literal strings to regex patterns with `_match_narrative_op()` function
-3. **HIGH**: Stray hyphens survived normalization (`"exerts-"`, `"force-"`) → Added two additional regex passes for letter-hyphen-space and space-hyphen-letter patterns
-4. **MEDIUM**: Unary operators (`doubled`/`halved`/`tripled`) always returned None because `right_num` was required → Allow `right_num=None` for unary ops
-5. **LOW**: `callable` (builtin) type annotation → `Callable` (typing)
+**Verification**: 93/93 tests pass in test_server.py (13 new + 80 existing).
 
-**Files Modified**:
-- `server.py` — `_normalize_challenge_text()`, `_NARRATIVE_OPS` (regex), new `_match_narrative_op()`, rewritten `_solve_challenge()` (two-phase strategy), `Callable` import
-- `tests/test_server.py` — 11 new tests (obfuscated challenge, intervening words, unary ops, normalization edge cases), `_normalize_challenge_text` import
-
-**Verification**: 80/80 tests pass in test_server.py (11 new + 69 existing).
+### Prior: Regex Solver Bug Fixes (committed as f94cef6)
+Fixed 5 bugs in the regex-based solver (obfuscated text handling, narrative operators, stray hyphens, unary ops, type annotations).
 
 ## Queued — MCP SDK Upgrade (1.9 → 1.23+)
 
