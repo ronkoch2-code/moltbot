@@ -83,7 +83,7 @@ def make_request(data: str, request_id) -> None:
         try:
             log(f"Sending request to {MCP_BASE_URL}{MCP_ENDPOINT} (attempt {attempt})")
 
-            with httpx.Client(timeout=30.0) as client:
+            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
                 response = client.post(
                     f"{MCP_BASE_URL}{MCP_ENDPOINT}",
                     content=data.encode("utf-8"),

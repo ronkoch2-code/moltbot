@@ -1,7 +1,108 @@
 # Development State — Moltbot
 
 ## Current Task
-_(none — all tasks complete)_
+Verification challenge solver — bug fixes complete, ready for commit.
+
+## Uncommitted Work — 2026-02-20 (CLI Agent Session)
+
+Fixed 5 bugs in the verification challenge auto-solver (originally written by Desktop agent 2026-02-19):
+
+1. **CRITICAL**: Symbolic `/` operator stripped by `_normalize_challenge_text()` before detection → Fixed by checking symbolic operators on lightly-cleaned text BEFORE full normalization
+2. **CRITICAL**: Narrative operators (`"reduces by"`) failed when intervening words existed (`"reduces force by"`) → Converted `_NARRATIVE_OPS` from literal strings to regex patterns with `_match_narrative_op()` function
+3. **HIGH**: Stray hyphens survived normalization (`"exerts-"`, `"force-"`) → Added two additional regex passes for letter-hyphen-space and space-hyphen-letter patterns
+4. **MEDIUM**: Unary operators (`doubled`/`halved`/`tripled`) always returned None because `right_num` was required → Allow `right_num=None` for unary ops
+5. **LOW**: `callable` (builtin) type annotation → `Callable` (typing)
+
+**Files Modified**:
+- `server.py` — `_normalize_challenge_text()`, `_NARRATIVE_OPS` (regex), new `_match_narrative_op()`, rewritten `_solve_challenge()` (two-phase strategy), `Callable` import
+- `tests/test_server.py` — 11 new tests (obfuscated challenge, intervening words, unary ops, normalization edge cases), `_normalize_challenge_text` import
+
+**Verification**: 80/80 tests pass in test_server.py (11 new + 69 existing).
+
+## Queued — MCP SDK Upgrade (1.9 → 1.23+)
+
+### Block 19: Upgrade MCP SDK to >=1.23.0,<2
+
+**Why**: Pinned at `>=1.9.0` — 17 minor versions behind. CVE-2025-66416 (CVSS 7.6 HIGH) is a DNS rebinding vulnerability fixed in v1.23.0. The upcoming v2 (Q1 2026) will break the transport layer, so we pin `<2` to stay safe.
+
+**Prerequisite**: Verification challenge solver must be tested and committed/reverted first. No code changes until that's resolved.
+
+**Risk**: LOW — Moltbot uses a minimal SDK surface (FastMCP, Context, @mcp.tool(), streamable_http_app(), custom_route). Most breaking changes in 1.10–1.26 affect OAuth, resources, and client-side features we don't use.
+
+**SDK touchpoints in codebase** (5 total):
+1. `from mcp.server.fastmcp import FastMCP, Context` — server.py:23
+2. `mcp = FastMCP(...)` — server.py:458
+3. `@mcp.tool()` with annotations — 12 tools, server.py:737–1160
+4. `@mcp.custom_route("/health")` — server.py:472
+5. `mcp.streamable_http_app()` / `mcp.run()` — server.py:1195–1201
+
+#### Steps
+
+- [ ] **19.1** Pin version in requirements.txt: `mcp[cli]>=1.23.0,<2`
+  - File: `requirements.txt` (line 1)
+  - Also verify Pydantic pin is >=2.11 (SDK v1.11+ requires it)
+  - Current pin: `pydantic>=2.0` — update to `pydantic>=2.11`
+
+- [ ] **19.2** Check `MCP-Protocol-Version` header in stdio_bridge.py
+  - SDK v1.10+ requires this header for HTTP transport
+  - File: `stdio_bridge.py` — the custom HTTP client posts to `/mcp` without this header
+  - Action: Test if the upgraded SDK enforces this header; if so, add it to the POST request headers
+  - The header value should be the MCP spec version (e.g. `2025-06-18` or `2025-11-25`)
+
+- [ ] **19.3** Check DNS rebinding / TransportSecuritySettings interaction
+  - v1.23+ enables DNS rebinding protection by default
+  - Our server runs in Docker behind BearerAuthMiddleware (server.py:61–97)
+  - Action: Verify that `streamable_http_app()` doesn't reject requests from Docker's internal network (172.x.x.x) or the LAN IP (192.168.153.8)
+  - If it does, configure `TransportSecuritySettings` to allowlist Docker/LAN origins
+  - Ref: https://github.com/modelcontextprotocol/python-sdk — check TransportSecuritySettings docs
+
+- [ ] **19.4** Install upgraded SDK locally and run test suite
+  - `pip3 install "mcp[cli]>=1.23.0,<2" "pydantic>=2.11"`
+  - `source .env && export DATABASE_URL && pytest tests/ -v --tb=short`
+  - All 231+ tests must pass
+  - Pay special attention to: test_health.py (uses streamable_http_app), test_server.py (tool functions)
+
+- [ ] **19.5** Test stdio_bridge.py manually against upgraded Docker container
+  - Rebuild Docker image: `docker compose build moltbook-mcp` (on Zorin)
+  - Start container: `docker compose up -d moltbook-mcp`
+  - Run bridge from Mac: `echo '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{}}' | python3 stdio_bridge.py`
+  - Verify session establishment and tool listing work
+  - If MCP-Protocol-Version header is needed, fix in 19.2 and re-test
+
+- [ ] **19.6** Run a full heartbeat cycle
+  - Execute `heartbeat/celticxfer_heartbeat.sh` once
+  - Verify all MCP tools work end-to-end through the upgraded SDK
+  - Check Docker logs for warnings or errors
+
+- [ ] **19.7** Update documentation
+  - CLAUDE.md: Note SDK version pin rationale and CVE fix
+  - DEVELOPMENT_STATE.md: Mark complete
+
+#### Key version changes to be aware of
+
+| Version | Change | Moltbot Impact |
+|---------|--------|----------------|
+| 1.10.0 | MCP-Protocol-Version header required for HTTP | stdio_bridge.py may need header |
+| 1.11.0 | Pydantic >=2.11 required | Update pin in requirements.txt |
+| 1.13.1 | CORS config for browser clients | No impact (we don't serve browsers) |
+| 1.23.0 | CVE-2025-66416 DNS rebinding fix | **Primary reason for upgrade** |
+| 1.25.0 | v2 branch announced | Pin `<2` to avoid surprise breakage |
+
+#### Rollback plan
+If upgrade causes issues: revert requirements.txt to `mcp[cli]>=1.9.0` and rebuild Docker image. Module-level globals pattern (not ctx.lifespan_context) means no SDK version coupling in tool code.
+
+---
+
+## Uncommitted Work — 2026-02-19 (Desktop Agent Session) + 2026-02-20 (CLI Agent Fixes)
+
+Verification challenge auto-solver + diagnostic logging + bug fixes:
+- `server.py` — ~300 lines: `_words_to_number()`, `_extract_number()`, `_normalize_challenge_text()`, `_match_narrative_op()`, `_solve_challenge()`, `_auto_verify()`, write-op logging, challenge detection in error responses, 403 message update
+- `stdio_bridge.py` — 1 line: added `follow_redirects=True`
+- `tests/test_server.py` — ~340 lines: TestWordsToNumber, TestExtractNumber, TestSolveChallenge (with obfuscation tests), TestAutoVerify, TestApiRequestWithVerification, TestNormalizeChallengeText
+
+**Status**: All 80 tests pass. Ready for commit.
+
+---
 
 ## Plan — 2026-02-10 (continued)
 

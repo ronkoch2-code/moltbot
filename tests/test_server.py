@@ -14,6 +14,11 @@ from server import (
     _api_request,
     _get_client,
     _get_api_key,
+    _words_to_number,
+    _extract_number,
+    _normalize_challenge_text,
+    _solve_challenge,
+    _auto_verify,
     MOLTBOOK_API_BASE,
 )
 from content_filter import scan_text
@@ -88,11 +93,11 @@ class TestHttpErrorResponse:
         assert "authentication failed" in result["error"].lower()
         assert result["status"] == 401
 
-    def test_403_not_claimed(self):
-        """403 should return not claimed message."""
+    def test_403_forbidden(self):
+        """403 should return forbidden/suspended message."""
         error = self._make_error(403)
         result = _http_error_response(error)
-        assert "claimed" in result["error"].lower()
+        assert "forbidden" in result["error"].lower() or "suspended" in result["error"].lower()
         assert result["status"] == 403
 
     def test_404_not_found(self):
@@ -586,3 +591,331 @@ class TestApiErrorFiltering:
         assert "timed out" in result["error"].lower()
         # No detail field for timeouts
         assert "detail" not in result
+
+
+# ===========================================================================
+# Verification challenge solver tests
+# ===========================================================================
+
+
+class TestWordsToNumber:
+    """Tests for _words_to_number() word-form number parser."""
+
+    def test_simple_units(self):
+        assert _words_to_number("one") == 1.0
+        assert _words_to_number("nine") == 9.0
+        assert _words_to_number("zero") == 0.0
+
+    def test_teens(self):
+        assert _words_to_number("eleven") == 11.0
+        assert _words_to_number("sixteen") == 16.0
+        assert _words_to_number("nineteen") == 19.0
+
+    def test_tens(self):
+        assert _words_to_number("twenty") == 20.0
+        assert _words_to_number("fifty") == 50.0
+        assert _words_to_number("ninety") == 90.0
+
+    def test_tens_with_units(self):
+        assert _words_to_number("thirty two") == 32.0
+        assert _words_to_number("forty five") == 45.0
+        assert _words_to_number("seventy eight") == 78.0
+
+    def test_hundreds(self):
+        assert _words_to_number("one hundred") == 100.0
+        assert _words_to_number("three hundred") == 300.0
+
+    def test_hundreds_with_tens(self):
+        assert _words_to_number("one hundred twenty five") == 125.0
+        assert _words_to_number("two hundred fifty") == 250.0
+
+    def test_thousands(self):
+        assert _words_to_number("two thousand") == 2000.0
+        assert _words_to_number("two thousand five hundred") == 2500.0
+
+    def test_digit_string(self):
+        assert _words_to_number("42") == 42.0
+        assert _words_to_number("3.14") == 3.14
+
+    def test_non_number_returns_none(self):
+        assert _words_to_number("lobster claw") is None
+        assert _words_to_number("") is None
+
+    def test_case_insensitive(self):
+        assert _words_to_number("Thirty Two") == 32.0
+
+
+class TestExtractNumber:
+    """Tests for _extract_number() — extracting numbers from narrative text."""
+
+    def test_digit_in_text(self):
+        assert _extract_number("the force is 32 newtons") == 32.0
+
+    def test_decimal_in_text(self):
+        assert _extract_number("weighing 3.5 kilograms") == 3.5
+
+    def test_word_number_in_text(self):
+        assert _extract_number("A lobsters claw exerts thirty two newtons") == 32.0
+
+    def test_word_teen_in_text(self):
+        assert _extract_number("another claw exerts sixteen newtons") == 16.0
+
+    def test_prefers_last_digit(self):
+        """When multiple digit numbers exist, take the last one."""
+        assert _extract_number("section 3 has 42 items") == 42.0
+
+    def test_no_number_returns_none(self):
+        assert _extract_number("what is the total?") is None
+
+
+class TestSolveChallenge:
+    """Tests for _solve_challenge() — end-to-end challenge solving."""
+
+    def test_addition_word_numbers(self):
+        challenge = (
+            "A lobsters claw exerts thirty two newtons + "
+            "another claw exerts sixteen newtons, what is the total?"
+        )
+        assert _solve_challenge(challenge) == "48.00"
+
+    def test_addition_digit_numbers(self):
+        challenge = "A crab weighs 15 grams + another crab weighs 25 grams, total?"
+        assert _solve_challenge(challenge) == "40.00"
+
+    def test_subtraction(self):
+        challenge = "A lobster has fifty claws - it loses twelve claws, how many remain?"
+        assert _solve_challenge(challenge) == "38.00"
+
+    def test_multiplication(self):
+        challenge = "A lobster has 4 legs * each leg has 3 segments, total segments?"
+        assert _solve_challenge(challenge) == "12.00"
+
+    def test_division(self):
+        challenge = "A tank has 100 liters / shared among 4 lobsters, each gets?"
+        assert _solve_challenge(challenge) == "25.00"
+
+    def test_mixed_word_and_digit(self):
+        challenge = (
+            "A lobsters claw exerts twenty newtons + "
+            "another claw exerts 15 newtons, what is the total?"
+        )
+        assert _solve_challenge(challenge) == "35.00"
+
+    def test_no_operator_returns_none(self):
+        assert _solve_challenge("How many lobsters are there?") is None
+
+    def test_empty_returns_none(self):
+        assert _solve_challenge("") is None
+        assert _solve_challenge(None) is None
+
+    def test_decimal_result(self):
+        challenge = "A lobster weighs 10 grams / split into 3 parts, each weighs?"
+        result = _solve_challenge(challenge)
+        assert result == "3.33"
+
+    def test_obfuscated_lobster_challenge(self):
+        """Real Moltbook challenge with mixed case and special char separators."""
+        challenge = (
+            "A] LoB-stEr] ClAw^ ExErTs- ThIrTy] FiVe~ NeW/ToNs, "
+            "Um BuT^ MoLt-InG ReDuCeS| FoRce- By< SeVeN> , WhAt^ ReMaInS?"
+        )
+        assert _solve_challenge(challenge) == "28.00"
+
+    def test_narrative_op_with_intervening_words(self):
+        """Narrative operators with nouns between verb and preposition."""
+        challenge = (
+            "A claw exerts fifty newtons but molting "
+            "decreases its strength by ten, what remains?"
+        )
+        assert _solve_challenge(challenge) == "40.00"
+
+    def test_doubled_unary(self):
+        """Unary 'doubled' operator should work without a right operand."""
+        challenge = "A lobster weighing fifteen newtons doubled"
+        assert _solve_challenge(challenge) == "30.00"
+
+    def test_halved_unary(self):
+        """Unary 'halved' operator should work without a right operand."""
+        challenge = "A force of forty newtons halved"
+        assert _solve_challenge(challenge) == "20.00"
+
+    def test_narrative_divided_by(self):
+        """'divided by' narrative operator should work."""
+        challenge = "A tank of 100 liters divided by 4 lobsters, each gets?"
+        assert _solve_challenge(challenge) == "25.00"
+
+
+class TestAutoVerify:
+    """Tests for _auto_verify() — integration with Moltbook /verify endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_no_challenge_passes_through(self):
+        """Responses without verification_code should pass through unchanged."""
+        data = {"success": True, "post": {"id": "abc123"}}
+        async with httpx.AsyncClient() as client:
+            result = await _auto_verify(client, "api_key_123", data)
+        assert result == data
+        assert "verification_status" not in result
+
+    @pytest.mark.asyncio
+    async def test_challenge_solved_and_verified(self, httpx_mock):
+        """Challenge should be solved and verified via POST /verify."""
+        httpx_mock.add_response(
+            url=f"{MOLTBOOK_API_BASE}/verify",
+            json={"success": True, "message": "Content verified and published"},
+        )
+
+        data = {
+            "success": True,
+            "post": {"id": "abc123"},
+            "verification_code": "moltbook_verify_test123",
+            "challenge": (
+                "A lobsters claw exerts thirty two newtons + "
+                "another claw exerts sixteen newtons, what is the total?"
+            ),
+        }
+        async with httpx.AsyncClient() as client:
+            result = await _auto_verify(client, "api_key_123", data)
+
+        assert result["verification_status"] == "verified"
+        assert result["verification_response"]["success"] is True
+
+        # Verify the POST was made with correct answer
+        request = httpx_mock.get_request()
+        body = json.loads(request.content)
+        assert body["verification_code"] == "moltbook_verify_test123"
+        assert body["answer"] == "48.00"
+
+    @pytest.mark.asyncio
+    async def test_unsolvable_challenge_marked(self):
+        """Unparseable challenges should be marked as unsolved."""
+        data = {
+            "success": True,
+            "verification_code": "moltbook_verify_test456",
+            "challenge": "What color is a lobster?",
+        }
+        async with httpx.AsyncClient() as client:
+            result = await _auto_verify(client, "api_key_123", data)
+
+        assert result["verification_status"] == "unsolved"
+        assert "verification_error" in result
+
+    @pytest.mark.asyncio
+    async def test_verify_endpoint_failure(self, httpx_mock):
+        """Failed verification should be marked as failed."""
+        httpx_mock.add_response(
+            url=f"{MOLTBOOK_API_BASE}/verify",
+            status_code=400,
+            json={"success": False, "error": "Wrong answer"},
+        )
+
+        data = {
+            "success": True,
+            "verification_code": "moltbook_verify_test789",
+            "challenge": "A claw has 10 newtons + another has 5 newtons, total?",
+        }
+        async with httpx.AsyncClient() as client:
+            result = await _auto_verify(client, "api_key_123", data)
+
+        assert result["verification_status"] == "failed"
+
+    @pytest.mark.asyncio
+    async def test_verify_network_error(self, httpx_mock):
+        """Network errors during verification should be caught gracefully."""
+        httpx_mock.add_exception(
+            httpx.ConnectError("Connection refused"),
+            url=f"{MOLTBOOK_API_BASE}/verify",
+        )
+
+        data = {
+            "success": True,
+            "verification_code": "moltbook_verify_net_err",
+            "challenge": "A claw has 20 newtons + another has 10 newtons, total?",
+        }
+        async with httpx.AsyncClient() as client:
+            result = await _auto_verify(client, "api_key_123", data)
+
+        assert result["verification_status"] == "error"
+        assert "verification_error" in result
+
+
+class TestApiRequestWithVerification:
+    """Tests for _api_request() integration with auto-verification."""
+
+    @pytest.mark.asyncio
+    async def test_post_with_challenge_auto_verifies(self, httpx_mock):
+        """POST requests returning a challenge should auto-verify."""
+        # First response: the post creation with a challenge
+        httpx_mock.add_response(
+            url=f"{MOLTBOOK_API_BASE}/posts",
+            json={
+                "success": True,
+                "post": {"id": "post_999"},
+                "verification_code": "moltbook_verify_auto",
+                "challenge": "A claw exerts twenty newtons + another exerts ten newtons, total?",
+            },
+        )
+        # Second response: the verification
+        httpx_mock.add_response(
+            url=f"{MOLTBOOK_API_BASE}/verify",
+            json={"success": True, "message": "Verified"},
+        )
+
+        async with httpx.AsyncClient() as client:
+            result = await _api_request(
+                client, "POST", "/posts", "api_key_123",
+                json_body={"title": "Test", "content": "Body"},
+            )
+
+        assert result["success"] is True
+        assert result["verification_status"] == "verified"
+
+    @pytest.mark.asyncio
+    async def test_get_skips_verification(self, httpx_mock):
+        """GET requests should never trigger verification."""
+        httpx_mock.add_response(
+            url=f"{MOLTBOOK_API_BASE}/posts",
+            json={
+                "success": True,
+                "verification_code": "should_not_trigger",
+                "challenge": "dummy",
+            },
+        )
+
+        async with httpx.AsyncClient() as client:
+            result = await _api_request(client, "GET", "/posts", "api_key_123")
+
+        # Should pass through without verification
+        assert "verification_status" not in result
+        assert result["verification_code"] == "should_not_trigger"
+
+
+class TestNormalizeChallengeText:
+    """Tests for _normalize_challenge_text() obfuscation removal."""
+
+    def test_mixed_case_separators(self):
+        result = _normalize_challenge_text("A] LoB-stEr] ClAw^")
+        assert result == "a lobster claw"
+
+    def test_stray_trailing_hyphen(self):
+        result = _normalize_challenge_text("ExErTs- ThIrTy")
+        assert "-" not in result
+        assert "exerts" in result
+        assert "thirty" in result
+
+    def test_stray_leading_hyphen(self):
+        result = _normalize_challenge_text("word -Another")
+        assert "-" not in result
+
+    def test_intra_word_hyphen_removed(self):
+        result = _normalize_challenge_text("MoLt-InG")
+        assert result == "molting"
+
+    def test_slash_separator_removed(self):
+        result = _normalize_challenge_text("NeW/ToNs")
+        assert result == "new tons"
+
+    def test_standalone_hyphen_preserved(self):
+        """Hyphen between spaces (minus sign) should be preserved."""
+        result = _normalize_challenge_text("ten - five")
+        assert " - " in result

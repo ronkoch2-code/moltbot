@@ -15,7 +15,7 @@ import re
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 from enum import Enum
 
 import httpx
@@ -143,8 +143,24 @@ async def _api_request(
         response = await client.request(
             method, url, headers=headers, json=json_body, params=params, timeout=30.0
         )
+
+        # Log raw response for write operations (diagnostic for challenge debugging)
+        if method in ("POST", "PUT", "PATCH"):
+            log_security_event({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "event": "write_response_raw",
+                "status_code": response.status_code,
+                "path": path,
+                "method": method,
+                "body_preview": response.text[:500],
+            })
+
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        # Auto-solve verification challenges on write operations
+        if method in ("POST", "PUT", "PATCH") and isinstance(data, dict):
+            data = await _auto_verify(client, api_key, data)
+        return data
     except httpx.HTTPStatusError as e:
         # Scan error response body through content filter
         body_text = e.response.text[:500]
@@ -162,6 +178,18 @@ async def _api_request(
             "flags": scan_result["flags"],
             "body_preview": scan_result["sanitised"][:200] if not scan_result["clean"] else body_text[:200],
         })
+
+        # Check for verification challenges in error responses (e.g. 403 with embedded challenge)
+        if method in ("POST", "PUT", "PATCH") and e.response.status_code in (403, 401):
+            try:
+                error_data = e.response.json()
+                if isinstance(error_data, dict) and ("verification_code" in error_data or "challenge" in error_data):
+                    logger.info(f"Verification challenge found in {e.response.status_code} error response")
+                    error_data = await _auto_verify(client, api_key, error_data)
+                    if error_data.get("verification_status") == "verified":
+                        return error_data
+            except (json.JSONDecodeError, Exception) as ve:
+                logger.warning(f"Could not parse error response for challenge check: {ve}")
 
         # Pass filtered body if flagged
         filtered_body = scan_result["sanitised"] if not scan_result["clean"] else None
@@ -186,7 +214,7 @@ def _http_error_response(e: httpx.HTTPStatusError, *, filtered_body: str | None 
     logger.warning(f"HTTP {status} from Moltbook API: {body}")
     messages = {
         401: "Authentication failed. Check your MOLTBOOK_API_KEY.",
-        403: "Agent is not yet claimed. Have your human visit the claim URL first.",
+        403: "Forbidden. Account may be suspended or not yet claimed. Check agent status.",
         404: "Resource not found. Check the post/comment/submolt ID.",
         429: "Rate limited by Moltbook. Wait a moment before retrying.",
     }
@@ -195,6 +223,333 @@ def _http_error_response(e: httpx.HTTPStatusError, *, filtered_body: str | None 
         "status": status,
         "detail": body,
     }
+
+
+# ---------------------------------------------------------------------------
+# Verification challenge solver
+# ---------------------------------------------------------------------------
+
+_WORD_NUMBERS: Dict[str, int] = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30,
+    "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70,
+    "eighty": 80, "ninety": 90,
+}
+_NUMBER_WORDS = set(_WORD_NUMBERS.keys()) | {"hundred", "thousand"}
+
+_CHALLENGE_OPS = {
+    "+": lambda a, b: a + b,
+    "-": lambda a, b: a - b,
+    "*": lambda a, b: a * b,
+    "\u00d7": lambda a, b: a * b,
+    "/": lambda a, b: a / b if b != 0 else 0.0,
+    "\u00f7": lambda a, b: a / b if b != 0 else 0.0,
+}
+
+
+def _words_to_number(text: str) -> float | None:
+    """Convert word-form numbers to float. E.g. 'thirty two' -> 32.0."""
+    text = text.strip().lower()
+    try:
+        return float(text)
+    except ValueError:
+        pass
+
+    words = text.split()
+    if not words:
+        return None
+
+    total = 0
+    current = 0
+    found_any = False
+
+    for word in words:
+        if word in _WORD_NUMBERS:
+            current += _WORD_NUMBERS[word]
+            found_any = True
+        elif word == "hundred":
+            current = (current or 1) * 100
+            found_any = True
+        elif word == "thousand":
+            current = (current or 1) * 1000
+            total += current
+            current = 0
+            found_any = True
+
+    total += current
+    return float(total) if found_any else None
+
+
+def _extract_number(text: str) -> float | None:
+    """Extract a number from narrative text (digit or word form)."""
+    # Try digit-form numbers first
+    digit_matches = re.findall(r"[\d]+(?:\.[\d]+)?", text)
+    if digit_matches:
+        return float(digit_matches[-1])
+
+    # Scan for longest contiguous sequence of number words
+    words = re.findall(r"[a-z]+", text.lower())
+    best_num: float | None = None
+    best_len = 0
+
+    for i in range(len(words)):
+        if words[i] in _NUMBER_WORDS:
+            num_words = []
+            j = i
+            while j < len(words) and words[j] in _NUMBER_WORDS:
+                num_words.append(words[j])
+                j += 1
+            if len(num_words) > best_len:
+                candidate = _words_to_number(" ".join(num_words))
+                if candidate is not None:
+                    best_num = candidate
+                    best_len = len(num_words)
+
+    return best_num
+
+
+def _normalize_challenge_text(text: str) -> str:
+    """Strip obfuscation from challenge text.
+
+    Moltbook challenges use mixed case and special-char separators:
+    'A] LoB-stEr] ClAw^ ExErTs- ThIrTy] FiVe~ NeW/ToNs'
+    -> 'a lobster claw exerts thirty five newtons'
+    """
+    # Replace common separator chars with spaces
+    cleaned = re.sub(r"[\]\[\^~|<>/{}()]+", " ", text)
+    # Replace hyphens surrounded by letters (intra-word) with nothing,
+    # but keep standalone hyphens (minus signs between spaces)
+    cleaned = re.sub(r"(?<=[a-zA-Z])-(?=[a-zA-Z])", "", cleaned)
+    # Remove stray hyphens adjacent to letters (e.g., "ExErTs- " or " -ThIrTy")
+    cleaned = re.sub(r"(?<=[a-zA-Z])-(?=\s)", "", cleaned)
+    cleaned = re.sub(r"(?<=\s)-(?=[a-zA-Z])", "", cleaned)
+    # Collapse commas/periods used as separators (but keep decimal points)
+    cleaned = re.sub(r"(?<![0-9])[,.](?![0-9])", " ", cleaned)
+    # Collapse whitespace and lowercase
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().lower()
+    return cleaned
+
+
+# Narrative operator patterns: regex patterns allowing intervening words
+# between verb and preposition (e.g., "reduces force by" matches "reduc...by").
+_NARRATIVE_OPS: list[tuple[str, Callable[[float, float], float]]] = [
+    # Subtraction patterns (with optional intervening words before "by")
+    (r"reduc(?:es|ed)(?:\s+\w+)*?\s+by", lambda a, b: a - b),
+    (r"decreas(?:es|ed)(?:\s+\w+)*?\s+by", lambda a, b: a - b),
+    (r"drops?(?:\s+\w+)*?\s+by", lambda a, b: a - b),
+    (r"falls?(?:\s+\w+)*?\s+by", lambda a, b: a - b),
+    (r"loses", lambda a, b: a - b),
+    (r"lost", lambda a, b: a - b),
+    (r"minus", lambda a, b: a - b),
+    (r"subtract(?:s|ed)?(?:\s+\w+)*?\s+by", lambda a, b: a - b),
+    (r"less(?:\s+\w+)*?\s+by", lambda a, b: a - b),
+    (r"less", lambda a, b: a - b),
+    # Addition patterns
+    (r"adds", lambda a, b: a + b),
+    (r"added(?:\s+\w+)*?\s+to", lambda a, b: a + b),
+    (r"plus", lambda a, b: a + b),
+    (r"gains", lambda a, b: a + b),
+    (r"increas(?:es|ed)(?:\s+\w+)*?\s+by", lambda a, b: a + b),
+    (r"grows?(?:\s+\w+)*?\s+by", lambda a, b: a + b),
+    (r"combined(?:\s+\w+)*?\s+with", lambda a, b: a + b),
+    # Multiplication patterns
+    (r"times", lambda a, b: a * b),
+    (r"multiplied(?:\s+\w+)*?\s+by", lambda a, b: a * b),
+    (r"doubled", lambda a, b: a * 2),
+    (r"tripled", lambda a, b: a * 3),
+    # Division patterns
+    (r"divided(?:\s+\w+)*?\s+by", lambda a, b: a / b if b != 0 else 0.0),
+    (r"split(?:\s+\w+)*?\s+into", lambda a, b: a / b if b != 0 else 0.0),
+    (r"halved", lambda a, b: a / 2),
+]
+
+
+def _match_narrative_op(
+    text: str,
+) -> tuple[list[str] | None, Callable[[float, float], float] | None]:
+    """Match a narrative operator in normalized text using regex patterns.
+
+    Returns (parts, op_func) where parts is [left, right] text split at the
+    operator boundary, or (None, None) if no operator matched.
+    """
+    for pattern, func in _NARRATIVE_OPS:
+        match = re.search(pattern, text)
+        if match:
+            left = text[: match.start()]
+            right = text[match.end() :]
+            logger.info(f"Matched narrative operator: '{match.group()}'")
+            return [left, right], func
+    return None, None
+
+
+def _solve_challenge(challenge_text: str) -> str | None:
+    """Parse a lobster math challenge and return the answer with 2 decimal places.
+
+    Handles both symbolic operators ('+', '-') and narrative operators
+    ('reduces by', 'adds', etc.) in potentially obfuscated text.
+
+    Strategy:
+    1. Try symbolic operators on lightly-cleaned text (preserves operator chars)
+    2. If no symbolic match, normalize fully and try narrative operators
+
+    Example: "A] LoB-stEr] ClAw^ ExErTs- ThIrTy] FiVe~ NeW/ToNs,
+    Um BuT^ MoLt-InG ReDuCeS| FoRce- By< SeVeN> , WhAt^ ReMaInS?"
+    -> "28.00"
+    """
+    if not challenge_text:
+        return None
+
+    # --- Phase 1: Try symbolic operators on lightly-cleaned text ---
+    # Only collapse whitespace and lowercase; preserve operator chars (+, -, *, /)
+    light_cleaned = re.sub(r"\s+", " ", challenge_text).strip().lower()
+
+    op_func = None
+    parts = None
+    for op_char in _CHALLENGE_OPS:
+        if f" {op_char} " in light_cleaned:
+            parts = light_cleaned.split(f" {op_char} ", 1)
+            op_func = _CHALLENGE_OPS[op_char]
+            logger.info(f"Matched symbolic operator: '{op_char}'")
+            break
+
+    # --- Phase 2: Try narrative operators on fully normalized text ---
+    if not parts or not op_func:
+        normalized = _normalize_challenge_text(challenge_text)
+        logger.info(f"Normalized challenge: {normalized[:120]}")
+        parts, op_func = _match_narrative_op(normalized)
+
+    if not parts or not op_func:
+        logger.warning(f"Could not find operator in challenge: {challenge_text[:120]}")
+        return None
+
+    left_num = _extract_number(parts[0])
+    right_num = _extract_number(parts[1])
+
+    if left_num is None:
+        logger.warning(
+            f"Could not extract left number from challenge: "
+            f"left={left_num}, text={challenge_text[:120]}"
+        )
+        return None
+
+    # Handle unary operators (doubled, tripled, halved) — right_num not required
+    if right_num is None:
+        try:
+            result = op_func(left_num, 0)
+        except Exception:
+            logger.warning(
+                f"Could not extract right number from challenge: "
+                f"right={right_num}, text={challenge_text[:120]}"
+            )
+            return None
+    else:
+        result = op_func(left_num, right_num)
+
+    answer = f"{result:.2f}"
+    logger.info(f"Challenge solved: {left_num} op {right_num} = {answer}")
+    return answer
+
+
+async def _auto_verify(
+    client: httpx.AsyncClient,
+    api_key: str,
+    response_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Detect and solve verification challenges in API responses.
+
+    When a write operation returns a verification challenge, this function
+    parses the math problem, computes the answer, and submits it to the
+    /verify endpoint — all transparently before returning to the caller.
+
+    Handles both top-level and nested verification data structures:
+    - Top-level: {"verification_code": ..., "challenge": ...}
+    - Nested: {"comment": {..., "verification": {"verification_code": ..., "challenge_text": ...}}}
+    """
+    # Check top-level first
+    verification_code = response_data.get("verification_code")
+    challenge_text = response_data.get("challenge") or response_data.get("challenge_text")
+
+    # Check nested structures (comment/post responses with verification block)
+    if not verification_code:
+        for key in ("comment", "post", "verification"):
+            nested = response_data.get(key)
+            if isinstance(nested, dict):
+                v_block = nested.get("verification", nested)
+                if "verification_code" in v_block:
+                    verification_code = v_block["verification_code"]
+                    challenge_text = v_block.get("challenge_text") or v_block.get("challenge")
+                    break
+
+    if not verification_code or not challenge_text:
+        return response_data
+
+    logger.info(f"Verification challenge detected: {challenge_text[:80]}...")
+    log_security_event({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "event": "verification_challenge_received",
+        "challenge_text": challenge_text[:200],
+        "verification_code": verification_code,
+    })
+
+    answer = _solve_challenge(challenge_text)
+    if answer is None:
+        logger.error(f"Failed to solve verification challenge: {challenge_text}")
+        log_security_event({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": "verification_challenge_unsolved",
+            "verification_code": verification_code,
+            "challenge_text": challenge_text[:200],
+            "error": "Could not parse the math challenge",
+        })
+        response_data["verification_status"] = "unsolved"
+        response_data["verification_error"] = "Could not parse the math challenge"
+        return response_data
+
+    logger.info(f"Solved challenge: answer={answer}")
+
+    url = f"{MOLTBOOK_API_BASE}/verify"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        verify_resp = await client.post(
+            url,
+            headers=headers,
+            json={"verification_code": verification_code, "answer": answer},
+            timeout=30.0,
+        )
+        verify_data = verify_resp.json()
+        logger.info(f"Verification response: {verify_resp.status_code}")
+
+        response_data["verification_status"] = (
+            "verified" if verify_resp.status_code == 200 else "failed"
+        )
+        response_data["verification_response"] = verify_data
+        log_security_event({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": "verification_challenge_answered",
+            "verification_code": verification_code,
+            "answer": answer,
+            "status_code": verify_resp.status_code,
+            "result": "verified" if verify_resp.status_code == 200 else "failed",
+        })
+    except Exception as e:
+        logger.error(f"Verification request failed: {e}")
+        response_data["verification_status"] = "error"
+        response_data["verification_error"] = str(e)
+        log_security_event({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": "verification_challenge_error",
+            "verification_code": verification_code,
+            "answer": answer,
+            "error": str(e),
+        })
+
+    return response_data
 
 
 # ---------------------------------------------------------------------------
