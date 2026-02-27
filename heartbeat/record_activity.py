@@ -61,7 +61,17 @@ COMMENT_PATTERNS = [
     ),
     # "Left a comment on X's post"
     re.compile(
-        r"[Ll]eft\s+(?:a|one)\s+comment\s+on\s+(?P<author>[\w\-]+)'s\s+(?:post|comment)\s+(?:about|on)?\s*(?P<detail>.+?)(?:\.|$)",
+        r"[Ll]eft\s+(?:a|one)\s+comment\s+on\s+(?P<author>[\w\-]+)'s\s+(?:post|comment|thread)\s+(?:about|on)?\s*(?P<detail>.+?)(?:\.|$)",
+        re.MULTILINE,
+    ),
+    # "Left a comment/reply connecting/drawing/about..."
+    re.compile(
+        r"[Ll]eft\s+(?:a|one)\s+(?:comment|reply)\s+(?P<detail>.+?)(?:\.\s|$)",
+        re.MULTILINE,
+    ),
+    # "Replied to X's post/thread"
+    re.compile(
+        r"[Rr]eplied\s+to\s+(?P<author>[\w\-]+)(?:'s)?\s+(?:post|thread|comment)\s+(?:about|on)\s+(?P<detail>.+?)(?:\s+[—\-]\s+|$)",
         re.MULTILINE,
     ),
     # "Commented on the X post"
@@ -96,14 +106,29 @@ WELCOME_PATTERNS = [
 ]
 
 BROWSE_PATTERNS = [
-    # "Browsed the hot/new feed"
+    # "Browsed/Read the hot/new feed"
     re.compile(
-        r"[Bb]rowsed\s+the\s+(?P<sort>hot|new|top|rising)\s+feed",
+        r"(?:[Bb]rowsed|[Rr]ead)\s+the\s+(?P<sort>hot|new|top|rising)\s+feed",
         re.MULTILINE,
     ),
-    # "Browsed m/community"
+    # "Read the feed" (no sort specified)
     re.compile(
-        r"[Bb]rowsed\s+(?:the\s+)?(?:m/)?(?P<community>[\w\-]+)\s+(?:submolt|feed|community)",
+        r"(?:[Bb]rowsed|[Rr]ead)\s+the\s+feed",
+        re.MULTILINE,
+    ),
+    # "Read a thread on X in m/community"
+    re.compile(
+        r"[Rr]ead\s+(?:a\s+)?(?:thread|post)\s+(?:on|about)\s+(?P<detail>.+?)(?:\s+in\s+(?:m/)?(?P<community>[\w\-]+))?(?:\.|$)",
+        re.MULTILINE,
+    ),
+    # "Read X's thread/post on Y"
+    re.compile(
+        r"[Rr]ead\s+(?P<author>[\w\-]+)'s\s+(?:thread|post)\s+(?:on|about)\s+(?P<detail>.+?)(?:\.|$)",
+        re.MULTILINE,
+    ),
+    # "Browsed m/community feed"
+    re.compile(
+        r"(?:[Bb]rowsed|[Rr]ead)\s+(?:the\s+)?(?:m/)(?P<community>[\w\-]+)(?:\s+(?:submolt|feed|community))?",
         re.MULTILINE,
     ),
 ]
@@ -232,8 +257,13 @@ def extract_actions(raw_output: str) -> list[dict]:
     for pattern in BROWSE_PATTERNS:
         for match in pattern.finditer(raw_output):
             groups = match.groupdict()
-            detail = groups.get("sort") or groups.get("community", "")
-            add_action("browsed", detail=detail)
+            detail = (
+                groups.get("sort")
+                or groups.get("detail")
+                or groups.get("community")
+                or ""
+            ).strip()
+            add_action("browsed", detail=detail or "feed")
 
     # Status check
     if STATUS_CHECK_PATTERN.search(raw_output):

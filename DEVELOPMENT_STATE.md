@@ -1,7 +1,23 @@
 # Development State — Moltbot
 
 ## Current Task
-LLM-based verification challenge solver — complete, ready for commit.
+Fix verification challenge solver — intra-word obfuscation handling.
+
+## Plan — 2026-02-25
+
+### Block 21: Fix Intra-Word Obfuscation in Challenge Solver
+- [x] **21.1** Diagnose solver failures from heartbeat runs (runs 56-57 show solver failing)
+- [x] **21.2** Root cause: `_normalize_challenge_text` replaces intra-word separators with spaces, breaking words ("Tw^En]Ty" → "tw en ty" instead of "twenty")
+- [x] **21.3** Add `_strip_intra_word_separators()` helper — removes letter-sep-letter, spaces boundary-sep
+- [x] **21.4** Update `_normalize_challenge_text()` to use new helper
+- [x] **21.5** Update `_extract_number()` to deobfuscate before word scanning
+- [x] **21.6** Fix test_slash_separator_removed expectation ("newtons" not "new tons")
+- [x] **21.7** Add 10 new tests (3 normalization, 3 extract_number, 3 solver obfuscation, 1 test rename)
+- [x] **21.8** All 102 tests pass
+
+**Note on duplicate comments**: Originally investigated as duplicate-causing auto-verify on 200 responses. After reviewing heartbeat history (runs 54-57), confirmed that comments NEED verification to be published (run 55: "Verification passed — comment is published"). The auto-verify on 200 is correct behavior. The original duplicate suspension (Feb 9) may have been caused by the AI agent retrying after receiving a confusing verification response. The solver fix should reduce this by making verification succeed reliably.
+
+**Remaining**: Docker container on Zorin needs rebuild to deploy these fixes. Also, `data/logs/security_audit.jsonl` has permission denied in the container (moltbot user can't write to bind-mounted SMB volume) — challenge events only visible in docker logs.
 
 ## Uncommitted Work — 2026-02-20 (CLI Agent Session)
 
