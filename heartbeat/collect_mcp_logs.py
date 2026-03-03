@@ -304,29 +304,32 @@ def collect_audit_log(
 
     count = 0
     cur = conn.cursor()
-    for line in new_data.decode("utf-8", errors="replace").splitlines():
-        event = parse_security_audit(line)
-        if event:
-            try:
-                cur.execute(
-                    """INSERT INTO security_events
-                       (event_type, timestamp, source_ip, post_id, author_name,
-                        submolt_name, risk_score, flags, fields_affected,
-                        target_path, raw_log_line)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                       ON CONFLICT (raw_log_line) DO NOTHING""",
-                    (
-                        event["event_type"], event["timestamp"], event["source_ip"],
-                        event["post_id"], event["author_name"], event["submolt_name"],
-                        event["risk_score"], event["flags"], event["fields_affected"],
-                        event["target_path"], event["raw_log_line"],
-                    ),
-                )
-                count += 1
-            except psycopg2.IntegrityError:
-                conn.rollback()
+    try:
+        for line in new_data.decode("utf-8", errors="replace").splitlines():
+            event = parse_security_audit(line)
+            if event:
+                try:
+                    cur.execute(
+                        """INSERT INTO security_events
+                           (event_type, timestamp, source_ip, post_id, author_name,
+                            submolt_name, risk_score, flags, fields_affected,
+                            target_path, raw_log_line)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                           ON CONFLICT (raw_log_line) DO NOTHING""",
+                        (
+                            event["event_type"], event["timestamp"], event["source_ip"],
+                            event["post_id"], event["author_name"], event["submolt_name"],
+                            event["risk_score"], event["flags"], event["fields_affected"],
+                            event["target_path"], event["raw_log_line"],
+                        ),
+                    )
+                    count += 1
+                except psycopg2.IntegrityError:
+                    conn.rollback()
 
-    conn.commit()
+        conn.commit()
+    finally:
+        cur.close()
     if count:
         print(f"  Collected {count} security audit events", file=sys.stderr)
     return new_offset
@@ -351,13 +354,13 @@ def collect_docker_logs(
     str | None
         Latest timestamp seen, for incremental collection.
     """
-    cmd = ["docker", "logs", container, "--timestamps"]
+    cmd = ["docker", "logs", container, "--timestamps", "--tail", "5000"]
     if since:
         cmd.extend(["--since", since])
 
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30
+            cmd, capture_output=True, text=True, timeout=120
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         print(f"  Warning: Could not read docker logs: {e}", file=sys.stderr)
@@ -373,59 +376,62 @@ def collect_docker_logs(
     tool_count = 0
 
     cur = conn.cursor()
-    for line in all_lines:
-        # Try auth warning → security_events
-        auth_event = parse_auth_warning(line)
-        if auth_event:
-            try:
-                cur.execute(
-                    """INSERT INTO security_events
-                       (event_type, timestamp, source_ip, post_id, author_name,
-                        submolt_name, risk_score, flags, fields_affected,
-                        target_path, raw_log_line)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                       ON CONFLICT (raw_log_line) DO NOTHING""",
-                    (
-                        auth_event["event_type"], auth_event["timestamp"],
-                        auth_event["source_ip"], auth_event["post_id"],
-                        auth_event["author_name"], auth_event["submolt_name"],
-                        auth_event["risk_score"], auth_event["flags"],
-                        auth_event["fields_affected"], auth_event["target_path"],
-                        auth_event["raw_log_line"],
-                    ),
-                )
-                event_count += 1
-            except psycopg2.IntegrityError:
-                conn.rollback()
+    try:
+        for line in all_lines:
+            # Try auth warning → security_events
+            auth_event = parse_auth_warning(line)
+            if auth_event:
+                try:
+                    cur.execute(
+                        """INSERT INTO security_events
+                           (event_type, timestamp, source_ip, post_id, author_name,
+                            submolt_name, risk_score, flags, fields_affected,
+                            target_path, raw_log_line)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                           ON CONFLICT (raw_log_line) DO NOTHING""",
+                        (
+                            auth_event["event_type"], auth_event["timestamp"],
+                            auth_event["source_ip"], auth_event["post_id"],
+                            auth_event["author_name"], auth_event["submolt_name"],
+                            auth_event["risk_score"], auth_event["flags"],
+                            auth_event["fields_affected"], auth_event["target_path"],
+                            auth_event["raw_log_line"],
+                        ),
+                    )
+                    event_count += 1
+                except psycopg2.IntegrityError:
+                    conn.rollback()
 
-        # Try HTTP request → tool_calls
-        tool_call = parse_http_request(line)
-        if tool_call:
-            try:
-                cur.execute(
-                    """INSERT INTO tool_calls
-                       (timestamp, tool_name, target_id, target_type, direction,
-                        http_method, http_url, http_status, raw_log_line)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                       ON CONFLICT (raw_log_line) DO NOTHING""",
-                    (
-                        tool_call["timestamp"], tool_call["tool_name"],
-                        tool_call["target_id"], tool_call["target_type"],
-                        tool_call["direction"], tool_call["http_method"],
-                        tool_call["http_url"], tool_call["http_status"],
-                        tool_call["raw_log_line"],
-                    ),
-                )
-                tool_count += 1
-            except psycopg2.IntegrityError:
-                conn.rollback()
+            # Try HTTP request → tool_calls
+            tool_call = parse_http_request(line)
+            if tool_call:
+                try:
+                    cur.execute(
+                        """INSERT INTO tool_calls
+                           (timestamp, tool_name, target_id, target_type, direction,
+                            http_method, http_url, http_status, raw_log_line)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                           ON CONFLICT (raw_log_line) DO NOTHING""",
+                        (
+                            tool_call["timestamp"], tool_call["tool_name"],
+                            tool_call["target_id"], tool_call["target_type"],
+                            tool_call["direction"], tool_call["http_method"],
+                            tool_call["http_url"], tool_call["http_status"],
+                            tool_call["raw_log_line"],
+                        ),
+                    )
+                    tool_count += 1
+                except psycopg2.IntegrityError:
+                    conn.rollback()
 
-        # Track latest timestamp for incremental
-        ts_match = DOCKER_TS_RE.match(line)
-        if ts_match:
-            latest_ts = ts_match.group(1)
+            # Track latest timestamp for incremental
+            ts_match = DOCKER_TS_RE.match(line)
+            if ts_match:
+                latest_ts = ts_match.group(1)
 
-    conn.commit()
+        conn.commit()
+    finally:
+        cur.close()
     if event_count or tool_count:
         print(
             f"  Docker logs: {event_count} security events, {tool_count} tool calls",
@@ -470,36 +476,39 @@ def sync_blocklist(conn, blocklist_path: str) -> int:
     count = 0
     cur = conn.cursor()
 
-    for author_name, data in blocklist.items():
-        # Derive is_active from expires_at
-        expires_at = data.get("expires_at")
-        is_active = expires_at is None or expires_at > datetime.now(timezone.utc).isoformat()
+    try:
+        for author_name, data in blocklist.items():
+            # Derive is_active from expires_at
+            expires_at = data.get("expires_at")
+            is_active = expires_at is None or expires_at > datetime.now(timezone.utc).isoformat()
 
-        try:
-            cur.execute(
-                """INSERT INTO blocked_authors
-                   (author_name, blocked_at, reason, flag_count, unblocked_at, is_active)
-                   VALUES (%s, %s, %s, %s, %s, %s)
-                   ON CONFLICT (author_name) DO UPDATE SET
-                       blocked_at = EXCLUDED.blocked_at,
-                       reason = EXCLUDED.reason,
-                       flag_count = EXCLUDED.flag_count,
-                       unblocked_at = EXCLUDED.unblocked_at,
-                       is_active = EXCLUDED.is_active""",
-                (
-                    author_name,
-                    data.get("blocked_at"),
-                    data.get("reason"),
-                    data.get("flag_count", 0),
-                    expires_at,
-                    is_active,
-                ),
-            )
-            count += 1
-        except psycopg2.IntegrityError:
-            conn.rollback()
+            try:
+                cur.execute(
+                    """INSERT INTO blocked_authors
+                       (author_name, blocked_at, reason, flag_count, unblocked_at, is_active)
+                       VALUES (%s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (author_name) DO UPDATE SET
+                           blocked_at = EXCLUDED.blocked_at,
+                           reason = EXCLUDED.reason,
+                           flag_count = EXCLUDED.flag_count,
+                           unblocked_at = EXCLUDED.unblocked_at,
+                           is_active = EXCLUDED.is_active""",
+                    (
+                        author_name,
+                        data.get("blocked_at"),
+                        data.get("reason"),
+                        data.get("flag_count", 0),
+                        expires_at,
+                        is_active,
+                    ),
+                )
+                count += 1
+            except psycopg2.IntegrityError:
+                conn.rollback()
 
-    conn.commit()
+        conn.commit()
+    finally:
+        cur.close()
     if count:
         print(f"  Synchronized {count} blocked authors", file=sys.stderr)
     return count
@@ -529,96 +538,98 @@ def detect_oddities(conn, since_minutes: int = 60) -> int:
     count = 0
 
     cur = conn.cursor()
-
-    # 1. Duplicate votes: same target_id + direction within the window
-    cur.execute(
-        """SELECT target_id, direction, COUNT(*) as cnt,
-                  STRING_AGG(id::text, ',') as ids
-           FROM tool_calls
-           WHERE tool_name = 'vote'
-             AND target_id IS NOT NULL
-             AND timestamp >= (NOW() - make_interval(mins => %s))::text
-           GROUP BY target_id, direction
-           HAVING COUNT(*) > 1""",
-        (since_minutes,),
-    )
-    dupes = cur.fetchall()
-
-    for row in dupes:
-        desc = (
-            f"Duplicate {row['direction'] or 'vote'} on {row['target_id']}: "
-            f"{row['cnt']} times"
-        )
+    try:
+        # 1. Duplicate votes: same target_id + direction within the window
         cur.execute(
-            """INSERT INTO behavior_oddities
-               (oddity_type, description, severity, related_tool_call_ids, detected_at)
-               VALUES (%s, %s, %s, %s, %s)""",
-            ("duplicate_vote", desc, "warning", row["ids"], now),
+            """SELECT target_id, direction, COUNT(*) as cnt,
+                      STRING_AGG(id::text, ',') as ids
+               FROM tool_calls
+               WHERE tool_name = 'vote'
+                 AND target_id IS NOT NULL
+                 AND timestamp >= (NOW() - make_interval(mins => %s))::text
+               GROUP BY target_id, direction
+               HAVING COUNT(*) > 1""",
+            (since_minutes,),
         )
-        count += 1
+        dupes = cur.fetchall()
 
-    # 2. Failed API calls: http_status >= 400
-    cur.execute(
-        """SELECT id, tool_name, http_url, http_status, timestamp
-           FROM tool_calls
-           WHERE http_status >= 400
-             AND timestamp >= (NOW() - make_interval(mins => %s))::text
-             AND id::text NOT IN (
-                 SELECT unnest(string_to_array(related_tool_call_ids, ','))
-                 FROM behavior_oddities
-                 WHERE oddity_type = 'failed_api_call'
-                   AND related_tool_call_ids IS NOT NULL
-             )""",
-        (since_minutes,),
-    )
-    failures = cur.fetchall()
+        for row in dupes:
+            desc = (
+                f"Duplicate {row['direction'] or 'vote'} on {row['target_id']}: "
+                f"{row['cnt']} times"
+            )
+            cur.execute(
+                """INSERT INTO behavior_oddities
+                   (oddity_type, description, severity, related_tool_call_ids, detected_at)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                ("duplicate_vote", desc, "warning", row["ids"], now),
+            )
+            count += 1
 
-    for row in failures:
-        desc = (
-            f"Failed API call: {row['tool_name'] or 'unknown'} "
-            f"returned HTTP {row['http_status']}"
-        )
+        # 2. Failed API calls: http_status >= 400
         cur.execute(
-            """INSERT INTO behavior_oddities
-               (oddity_type, description, severity, related_tool_call_ids, detected_at)
-               VALUES (%s, %s, %s, %s, %s)""",
-            (
-                "failed_api_call", desc,
-                "critical" if row["http_status"] >= 500 else "warning",
-                str(row["id"]), now,
-            ),
+            """SELECT id, tool_name, http_url, http_status, timestamp
+               FROM tool_calls
+               WHERE http_status >= 400
+                 AND timestamp >= (NOW() - make_interval(mins => %s))::text
+                 AND id::text NOT IN (
+                     SELECT unnest(string_to_array(related_tool_call_ids, ','))
+                     FROM behavior_oddities
+                     WHERE oddity_type = 'failed_api_call'
+                       AND related_tool_call_ids IS NOT NULL
+                 )""",
+            (since_minutes,),
         )
-        count += 1
+        failures = cur.fetchall()
 
-    # 3. Excessive calls: >30 tool calls in 5 minutes
-    cur.execute(
-        """SELECT COUNT(*) as cnt,
-                  MIN(timestamp) as burst_start,
-                  MAX(timestamp) as burst_end,
-                  STRING_AGG(id::text, ',') as ids
-           FROM tool_calls
-           WHERE timestamp >= (NOW() - make_interval(mins => %s))::text
-           GROUP BY date_trunc('hour', timestamp::timestamp)
-                    + INTERVAL '5 min' * FLOOR(EXTRACT(MINUTE FROM timestamp::timestamp) / 5)
-           HAVING COUNT(*) > 30""",
-        (since_minutes,),
-    )
-    bursts = cur.fetchall()
+        for row in failures:
+            desc = (
+                f"Failed API call: {row['tool_name'] or 'unknown'} "
+                f"returned HTTP {row['http_status']}"
+            )
+            cur.execute(
+                """INSERT INTO behavior_oddities
+                   (oddity_type, description, severity, related_tool_call_ids, detected_at)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                (
+                    "failed_api_call", desc,
+                    "critical" if row["http_status"] >= 500 else "warning",
+                    str(row["id"]), now,
+                ),
+            )
+            count += 1
 
-    for row in bursts:
-        desc = (
-            f"Excessive API calls: {row['cnt']} calls between "
-            f"{row['burst_start']} and {row['burst_end']}"
-        )
+        # 3. Excessive calls: >30 tool calls in 5 minutes
         cur.execute(
-            """INSERT INTO behavior_oddities
-               (oddity_type, description, severity, related_tool_call_ids, detected_at)
-               VALUES (%s, %s, %s, %s, %s)""",
-            ("excessive_calls", desc, "critical", row["ids"], now),
+            """SELECT COUNT(*) as cnt,
+                      MIN(timestamp) as burst_start,
+                      MAX(timestamp) as burst_end,
+                      STRING_AGG(id::text, ',') as ids
+               FROM tool_calls
+               WHERE timestamp >= (NOW() - make_interval(mins => %s))::text
+               GROUP BY date_trunc('hour', timestamp::timestamp)
+                        + INTERVAL '5 min' * FLOOR(EXTRACT(MINUTE FROM timestamp::timestamp) / 5)
+               HAVING COUNT(*) > 30""",
+            (since_minutes,),
         )
-        count += 1
+        bursts = cur.fetchall()
 
-    conn.commit()
+        for row in bursts:
+            desc = (
+                f"Excessive API calls: {row['cnt']} calls between "
+                f"{row['burst_start']} and {row['burst_end']}"
+            )
+            cur.execute(
+                """INSERT INTO behavior_oddities
+                   (oddity_type, description, severity, related_tool_call_ids, detected_at)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                ("excessive_calls", desc, "critical", row["ids"], now),
+            )
+            count += 1
+
+        conn.commit()
+    finally:
+        cur.close()
     if count:
         print(f"  Detected {count} oddities", file=sys.stderr)
     return count

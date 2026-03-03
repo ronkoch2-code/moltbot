@@ -368,60 +368,62 @@ def record_run(
     conn = get_connection(database_url)
     try:
         cur = conn.cursor()
+        try:
+            # Validate prompt_version_id exists (avoid FK violation if prompt was deleted)
+            if prompt_version_id is not None:
+                cur.execute(
+                    "SELECT id FROM heartbeat_prompts WHERE id = %s",
+                    (prompt_version_id,),
+                )
+                if cur.fetchone() is None:
+                    prompt_version_id = None
 
-        # Validate prompt_version_id exists (avoid FK violation if prompt was deleted)
-        if prompt_version_id is not None:
-            cur.execute(
-                "SELECT id FROM heartbeat_prompts WHERE id = %s",
-                (prompt_version_id,),
-            )
-            if cur.fetchone() is None:
-                prompt_version_id = None
-
-        cur.execute(
-            """
-            INSERT INTO heartbeat_runs
-                (run_id, started_at, finished_at, duration_seconds, exit_code,
-                 status, agent_name, script_variant, run_number, raw_output,
-                 summary, error_message, prompt_version_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (run_id) DO UPDATE SET
-                finished_at = EXCLUDED.finished_at,
-                duration_seconds = EXCLUDED.duration_seconds,
-                exit_code = EXCLUDED.exit_code,
-                status = EXCLUDED.status,
-                raw_output = EXCLUDED.raw_output,
-                summary = EXCLUDED.summary,
-                error_message = EXCLUDED.error_message,
-                prompt_version_id = EXCLUDED.prompt_version_id
-            """,
-            (
-                run_id, started_at, finished_at, duration_seconds, exit_code,
-                status, agent_name, script_variant, run_number, raw_output,
-                summary, error_message, prompt_version_id,
-            ),
-        )
-
-        for action in actions:
             cur.execute(
                 """
-                INSERT INTO heartbeat_actions
-                    (run_id, action_type, target_id, target_title,
-                     target_author, detail, succeeded)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO heartbeat_runs
+                    (run_id, started_at, finished_at, duration_seconds, exit_code,
+                     status, agent_name, script_variant, run_number, raw_output,
+                     summary, error_message, prompt_version_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (run_id) DO UPDATE SET
+                    finished_at = EXCLUDED.finished_at,
+                    duration_seconds = EXCLUDED.duration_seconds,
+                    exit_code = EXCLUDED.exit_code,
+                    status = EXCLUDED.status,
+                    raw_output = EXCLUDED.raw_output,
+                    summary = EXCLUDED.summary,
+                    error_message = EXCLUDED.error_message,
+                    prompt_version_id = EXCLUDED.prompt_version_id
                 """,
                 (
-                    run_id,
-                    action["action_type"],
-                    action.get("target_id"),
-                    action.get("target_title"),
-                    action.get("target_author"),
-                    action.get("detail"),
-                    action.get("succeeded", True),
+                    run_id, started_at, finished_at, duration_seconds, exit_code,
+                    status, agent_name, script_variant, run_number, raw_output,
+                    summary, error_message, prompt_version_id,
                 ),
             )
 
-        conn.commit()
+            for action in actions:
+                cur.execute(
+                    """
+                    INSERT INTO heartbeat_actions
+                        (run_id, action_type, target_id, target_title,
+                         target_author, detail, succeeded)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        run_id,
+                        action["action_type"],
+                        action.get("target_id"),
+                        action.get("target_title"),
+                        action.get("target_author"),
+                        action.get("detail"),
+                        action.get("succeeded", True),
+                    ),
+                )
+
+            conn.commit()
+        finally:
+            cur.close()
     finally:
         conn.close()
 

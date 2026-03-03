@@ -1,7 +1,33 @@
 # Development State — Moltbot
 
 ## Current Task
-Fix verification challenge solver — intra-word obfuscation handling.
+Stability improvements — Docker log rotation, resource cleanup, PostgreSQL tuning.
+
+## Plan — 2026-03-03
+
+### Block 22: Stability & Resource Management Improvements
+- [x] **22.1** Add Docker log rotation (json-file driver, max-size/max-file) to all 3 services in docker-compose.yml
+- [x] **22.2** Tune PostgreSQL: shared_buffers 128MB, effective_cache_size 256MB, work_mem 4MB, max_connections 50, mem_limit 512m, shm_size 128m
+- [x] **22.3** Improve PostgreSQL healthcheck: interval 10s, retries 3, start_period 30s
+- [x] **22.4** Change dashboard restart policy from on-failure:5 to unless-stopped
+- [x] **22.5** Increase MCP tmpfs from 10M to 100M (ML inference temp files)
+- [x] **22.6** Add --tail 5000 to docker logs command in collect_mcp_logs.py (prevent unbounded RAM usage)
+- [x] **22.7** Increase subprocess timeout from 30s to 120s for docker logs collection
+- [x] **22.8** Close all cursors explicitly in collect_mcp_logs.py (4 functions: collect_audit_log, collect_docker_logs, sync_blocklist, detect_oddities)
+- [x] **22.9** Close cursor explicitly in record_activity.py
+- [x] **22.10** Add _purge_expired_blocks() — removes expired time-based blocks at load time
+- [x] **22.11** Add _cleanup_stale_flags() — TTL-based eviction (7 days) + max size cap (1000) for _author_flags
+- [x] **22.12** Configure httpx connection pool: max_connections=20, max_keepalive_connections=5, connect timeout 10s
+- [x] **22.13** Pin dependency versions in requirements.txt using ~= (compatible release)
+- [x] **22.14** Update test for expired block purging (use future expiry date)
+- [x] **22.15** All 269 non-pre-failing tests pass
+
+**Investigation summary**: Zorin host crashes overnight likely caused by combination of:
+1. Docker container logs growing unbounded (no logging driver configured)
+2. Memory pressure from DeBERTa model + uncapped in-memory dictionaries
+3. collect_mcp_logs.py loading all docker logs into RAM without --tail limit
+4. Unclosed database cursors accumulating over repeated heartbeat runs
+5. PostgreSQL under-provisioned (20 max connections, 32MB shared buffers)
 
 ## Plan — 2026-02-25
 

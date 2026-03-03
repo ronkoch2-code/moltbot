@@ -730,7 +730,10 @@ async def app_lifespan(app):
     """
     global _http_client, _credentials
     _credentials = _load_credentials()
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(
+        limits=httpx.Limits(max_connections=20, max_keepalive_connections=5),
+        timeout=httpx.Timeout(30.0, connect=10.0),
+    ) as client:
         _http_client = client
         yield {"client": client, "credentials": _credentials}
     _http_client = None

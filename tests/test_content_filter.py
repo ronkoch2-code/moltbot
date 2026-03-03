@@ -482,7 +482,7 @@ class TestBlocklistPersistence:
             }
             content_filter._blocked_authors["BadBot2"] = {
                 "blocked_at": "2025-01-15T01:00:00Z",
-                "expires_at": "2025-01-16T01:00:00Z",
+                "expires_at": "2099-01-16T01:00:00+00:00",
                 "reason": "threshold exceeded",
                 "flag_count": 3
             }

@@ -24,25 +24,31 @@ services:
       - POSTGRES_USER=moltbot
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       - POSTGRES_DB=moltbot
-    # Low-memory tuning for 32GB host
+    # Memory tuning for 32GB host
     command:
       - "postgres"
       - "-c"
-      - "shared_buffers=32MB"
+      - "shared_buffers=128MB"
       - "-c"
-      - "effective_cache_size=64MB"
+      - "effective_cache_size=256MB"
       - "-c"
-      - "work_mem=2MB"
+      - "work_mem=4MB"
       - "-c"
-      - "max_connections=20"
-    mem_limit: 256m
-    memswap_limit: 256m
-    shm_size: 64m
+      - "max_connections=50"
+    mem_limit: 512m
+    memswap_limit: 512m
+    shm_size: 128m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U moltbot"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"
+        max-file: "3"
     ports:
       - "5433:5432"
     networks:
@@ -95,10 +101,15 @@ services:
     mem_limit: 4g
     memswap_limit: 4g
     # No CPU limit — dedicated host, let DeBERTa use all available cores
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     # --- Security hardening ---
     read_only: true                 # Immutable filesystem
     tmpfs:
-      - /tmp:size=10M               # Small tmpfs for Python tempfiles
+      - /tmp:size=100M              # tmpfs for Python tempfiles and ML inference
     security_opt:
       - no-new-privileges:true       # Prevent privilege escalation
     cap_drop:
@@ -113,7 +124,12 @@ services:
       args:
         - VITE_DASHBOARD_AUTH_TOKEN=${DASHBOARD_AUTH_TOKEN:-}
     container_name: moltbot-dashboard
-    restart: on-failure:5
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     ports:
       - "8081:8081"
     environment:

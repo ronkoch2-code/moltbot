@@ -174,15 +174,75 @@ AUTHOR_BLOCK_THRESHOLD = int(os.environ.get("AUTHOR_BLOCK_THRESHOLD", "3"))
 AUTHOR_BLOCK_DURATION_HOURS = int(os.environ.get("AUTHOR_BLOCK_DURATION_HOURS", "0"))  # 0 = permanent
 BLOCKLIST_PATH = os.environ.get("BLOCKLIST_PATH", "")
 
-# In-memory state
+# In-memory state — bounded to prevent unbounded memory growth
+_AUTHOR_FLAGS_MAX = 1000  # max tracked authors before LRU eviction
+_AUTHOR_FLAGS_TTL_HOURS = 168  # 7 days — evict stale entries
 _author_flags: Dict[str, Dict[str, Any]] = {}
 _blocked_authors: Dict[str, Dict[str, Any]] = {}
+
+
+def _purge_expired_blocks() -> int:
+    """Remove expired time-based blocks from _blocked_authors.
+
+    Returns the number of entries purged.
+    """
+    now = datetime.now(timezone.utc)
+    expired = []
+    for author_name, block_info in _blocked_authors.items():
+        expires_at = block_info.get("expires_at")
+        if not expires_at:
+            continue  # permanent block
+        try:
+            if now >= datetime.fromisoformat(expires_at):
+                expired.append(author_name)
+        except (ValueError, TypeError):
+            pass  # malformed timestamp — keep the block
+    for name in expired:
+        del _blocked_authors[name]
+    if expired:
+        logger.info(f"Purged {len(expired)} expired author blocks at startup")
+    return len(expired)
+
+
+def _cleanup_stale_flags() -> int:
+    """Remove stale entries from _author_flags based on TTL and max size.
+
+    Returns the number of entries removed.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(hours=_AUTHOR_FLAGS_TTL_HOURS)).isoformat()
+    removed = 0
+
+    # Remove entries older than TTL
+    stale = [
+        name for name, info in _author_flags.items()
+        if info.get("last_flagged", "") < cutoff
+    ]
+    for name in stale:
+        del _author_flags[name]
+        removed += 1
+
+    # Enforce max size — evict oldest entries by last_flagged
+    if len(_author_flags) > _AUTHOR_FLAGS_MAX:
+        sorted_authors = sorted(
+            _author_flags.items(),
+            key=lambda x: x[1].get("last_flagged", ""),
+        )
+        excess = len(_author_flags) - _AUTHOR_FLAGS_MAX
+        for name, _ in sorted_authors[:excess]:
+            del _author_flags[name]
+            removed += 1
+
+    if removed:
+        logger.info(f"Cleaned up {removed} stale author flag entries")
+    return removed
 
 
 def _load_blocklist() -> None:
     """Load the author blocklist from disk.
 
     If BLOCKLIST_PATH is not set or the file doesn't exist, this is a no-op.
+    Purges expired time-based blocks at load time.
     The blocklist is stored as JSON with the format:
     {
         "author_name": {
@@ -203,6 +263,10 @@ def _load_blocklist() -> None:
                 data = json.load(f)
                 _blocked_authors = data if isinstance(data, dict) else {}
                 logger.info(f"Loaded {len(_blocked_authors)} blocked authors from {BLOCKLIST_PATH}")
+                # Purge expired blocks at load time
+                purged = _purge_expired_blocks()
+                if purged:
+                    _save_blocklist()
         else:
             logger.info(f"No existing blocklist found at {BLOCKLIST_PATH}")
     except Exception as e:
@@ -294,6 +358,10 @@ def _record_author_flag(author_name: str, flags: List[str]) -> None:
     """
     if not author_name or author_name == "unknown":
         return
+
+    # Periodic cleanup — run when dict is getting large
+    if len(_author_flags) >= _AUTHOR_FLAGS_MAX:
+        _cleanup_stale_flags()
 
     # Initialize or increment flag counter
     if author_name not in _author_flags:
