@@ -925,14 +925,68 @@ class TestNormalizeChallengeText:
         result = _normalize_challenge_text("MoLt-InG")
         assert result == "molting"
 
-    def test_slash_separator_removed(self):
+    def test_slash_intra_word_removed(self):
+        """Slash between letters is intra-word obfuscation, not a word break."""
         result = _normalize_challenge_text("NeW/ToNs")
-        assert result == "new tons"
+        assert result == "newtons"
 
     def test_standalone_hyphen_preserved(self):
         """Hyphen between spaces (minus sign) should be preserved."""
         result = _normalize_challenge_text("ten - five")
         assert " - " in result
+
+    def test_intra_word_separator_preserved_as_word(self):
+        """Separators between letters should be stripped, not become spaces."""
+        result = _normalize_challenge_text("Tw^En]Ty")
+        assert result == "twenty"
+
+    def test_intra_word_multiple_separators(self):
+        """Multiple different intra-word separators in one word."""
+        result = _normalize_challenge_text("Ei]GhT")
+        assert result == "eight"
+
+    def test_mixed_intra_and_boundary_separators(self):
+        """Intra-word stripped, boundary-position replaced with space."""
+        result = _normalize_challenge_text("Tw^En]Ty] FiVe")
+        assert result == "twenty five"
+
+
+class TestExtractNumberObfuscated:
+    """Tests for _extract_number() with obfuscated text."""
+
+    def test_intra_word_separators(self):
+        result = _extract_number("Tw^En]Ty Ei]GhT")
+        assert result == 28.0
+
+    def test_single_obfuscated_word(self):
+        result = _extract_number("Se^VeN")
+        assert result == 7.0
+
+    def test_obfuscated_in_narrative(self):
+        result = _extract_number("a lobster claw^ exerts- Th^Ir]Ty~ FiVe| newtons")
+        assert result == 35.0
+
+
+class TestSolveChallengeRegexObfuscated:
+    """Tests for _solve_challenge_regex() with intra-word obfuscation."""
+
+    def test_intra_word_addition(self):
+        result = _solve_challenge_regex("Tw^En]Ty Ei]GhT + Fi^Ve")
+        assert result == "33.00"
+
+    def test_intra_word_subtraction(self):
+        result = _solve_challenge_regex(
+            "A] LoB-stEr] ClAw^ ExErTs- Th^Ir]Ty~ FiVe| NeW/ToNs "
+            "- AnOtHeR| Se^VeN"
+        )
+        assert result == "28.00"
+
+    def test_intra_word_narrative(self):
+        result = _solve_challenge_regex(
+            "A] LoB-stEr] ClAw^ ExErTs- Tw^En]Ty~ NeW/ToNs, "
+            "Um BuT^ MoLt-InG ReDuCeS| FoRce- By< Se^VeN> , WhAt^ ReMaInS?"
+        )
+        assert result == "13.00"
 
 
 # ===========================================================================

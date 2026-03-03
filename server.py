@@ -297,8 +297,11 @@ def _extract_number(text: str) -> float | None:
     if digit_matches:
         return float(digit_matches[-1])
 
+    # Strip intra-word obfuscation so "Tw^En]Ty" becomes "TwEnTy"
+    deobfuscated = _strip_intra_word_separators(text)
+
     # Scan for longest contiguous sequence of number words
-    words = re.findall(r"[a-z]+", text.lower())
+    words = re.findall(r"[a-z]+", deobfuscated.lower())
     best_num: float | None = None
     best_len = 0
 
@@ -318,15 +321,34 @@ def _extract_number(text: str) -> float | None:
     return best_num
 
 
+def _strip_intra_word_separators(text: str) -> str:
+    """Remove obfuscation characters embedded inside words.
+
+    Moltbook inserts separator chars (^, ], ~, etc.) within words:
+    'Tw^En]Ty' -> 'TwEnTy', 'NeW/ToNs' -> 'NeWToNs'
+    Separators at word boundaries are replaced with spaces:
+    'FiVe~ NeW' -> 'FiVe NeW', 'ClAw^' -> 'ClAw '
+    """
+    # Step 1: Remove separators between letters (intra-word)
+    cleaned = re.sub(
+        r"(?<=[a-zA-Z])[\]\[\^~|<>/{}()]+(?=[a-zA-Z])", "", text
+    )
+    # Step 2: Replace remaining separators with spaces (word boundaries)
+    cleaned = re.sub(r"[\]\[\^~|<>/{}()]+", " ", cleaned)
+    return cleaned
+
+
 def _normalize_challenge_text(text: str) -> str:
     """Strip obfuscation from challenge text.
 
     Moltbook challenges use mixed case and special-char separators:
     'A] LoB-stEr] ClAw^ ExErTs- ThIrTy] FiVe~ NeW/ToNs'
     -> 'a lobster claw exerts thirty five newtons'
+    Also handles intra-word separators:
+    'Tw^En]Ty Ei]GhT' -> 'twenty eight'
     """
-    # Replace common separator chars with spaces
-    cleaned = re.sub(r"[\]\[\^~|<>/{}()]+", " ", text)
+    # Strip intra-word separator chars, replace boundary ones with spaces
+    cleaned = _strip_intra_word_separators(text)
     # Replace hyphens surrounded by letters (intra-word) with nothing,
     # but keep standalone hyphens (minus signs between spaces)
     cleaned = re.sub(r"(?<=[a-zA-Z])-(?=[a-zA-Z])", "", cleaned)

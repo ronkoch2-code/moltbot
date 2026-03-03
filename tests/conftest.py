@@ -5,6 +5,7 @@ import json
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 from typing import Dict, Any
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 import psycopg2
@@ -15,7 +16,48 @@ import psycopg2.extras
 # PostgreSQL test database fixtures
 # ---------------------------------------------------------------------------
 
-TEST_DATABASE_URL = os.environ.get(
+_TEST_DB_NAME = "moltbot_test"
+
+
+def _base_url_and_dbname(url: str) -> tuple[str, str]:
+    """Split a DATABASE_URL into (base_url_pointing_at_postgres_db, original_dbname)."""
+    parsed = urlparse(url)
+    original_db = parsed.path.lstrip("/")
+    base = urlunparse(parsed._replace(path="/postgres"))
+    return base, original_db
+
+
+def _create_test_db(base_url: str) -> str:
+    """Create the test database if it doesn't exist. Return its URL."""
+    conn = psycopg2.connect(base_url)
+    conn.autocommit = True
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM pg_database WHERE datname = %s", (_TEST_DB_NAME,)
+    )
+    if not cur.fetchone():
+        cur.execute(f"CREATE DATABASE {_TEST_DB_NAME}")
+    conn.close()
+
+    parsed = urlparse(base_url)
+    return urlunparse(parsed._replace(path=f"/{_TEST_DB_NAME}"))
+
+
+def _drop_test_db(base_url: str) -> None:
+    """Drop the test database, terminating any lingering connections."""
+    conn = psycopg2.connect(base_url)
+    conn.autocommit = True
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+        "WHERE datname = %s AND pid <> pg_backend_pid()",
+        (_TEST_DB_NAME,),
+    )
+    cur.execute(f"DROP DATABASE IF EXISTS {_TEST_DB_NAME}")
+    conn.close()
+
+
+_SOURCE_URL = os.environ.get(
     "TEST_DATABASE_URL",
     os.environ.get("DATABASE_URL", ""),
 )
@@ -23,15 +65,19 @@ TEST_DATABASE_URL = os.environ.get(
 
 @pytest.fixture
 def pg_database_url():
-    """Return the test database URL."""
-    return TEST_DATABASE_URL
+    """Return the test database URL (points at moltbot_test, never production)."""
+    if not _SOURCE_URL:
+        pytest.skip("DATABASE_URL / TEST_DATABASE_URL not set")
+    base_url, _ = _base_url_and_dbname(_SOURCE_URL)
+    return _create_test_db(base_url)
 
 
 @pytest.fixture
 def pg_clean_db(pg_database_url):
-    """Create a clean PostgreSQL database for testing.
+    """Create a clean PostgreSQL test database for testing.
 
-    Drops and recreates all tables before each test, then cleans up after.
+    Uses a dedicated ``moltbot_test`` database so production data is never
+    touched. Drops and recreates all tables before each test.
     Sets DATABASE_URL env var so dashboard.api.database picks it up.
     """
     old_url = os.environ.get("DATABASE_URL")
@@ -48,6 +94,7 @@ def pg_clean_db(pg_database_url):
 
     # Drop all tables in reverse dependency order
     cur.execute("""
+        DROP TABLE IF EXISTS blocked_authors CASCADE;
         DROP TABLE IF EXISTS behavior_oddities CASCADE;
         DROP TABLE IF EXISTS tool_calls CASCADE;
         DROP TABLE IF EXISTS security_events CASCADE;

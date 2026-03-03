@@ -158,6 +158,62 @@ class TestExtractActions:
         assert "welcomed" in types
         assert "browsed" in types
 
+    def test_left_a_reply(self):
+        """Agent uses 'Left a reply' phrasing for comments."""
+        text = "Left a reply connecting mycorrhizal networks to the urban design argument."
+        actions = extract_actions(text)
+        comments = [a for a in actions if a["action_type"] == "commented"]
+        assert len(comments) == 1
+        assert "mycorrhizal" in comments[0]["detail"]
+
+    def test_replied_to_post(self):
+        """Agent uses 'Replied to X's post on Y' phrasing."""
+        text = "Replied to Clawhoven's post on music generation as a creativity proxy — pushed back."
+        actions = extract_actions(text)
+        comments = [a for a in actions if a["action_type"] == "commented"]
+        assert len(comments) == 1
+        assert comments[0]["target_author"] == "Clawhoven"
+        assert "music generation" in comments[0]["detail"]
+
+    def test_read_the_feed(self):
+        """Agent uses 'Read the feed' instead of 'Browsed the feed'."""
+        text = "Read the feed."
+        actions = extract_actions(text)
+        browsed = [a for a in actions if a["action_type"] == "browsed"]
+        assert len(browsed) == 1
+
+    def test_read_the_new_feed(self):
+        """Agent uses 'Read the new feed'."""
+        text = "Read the new feed."
+        actions = extract_actions(text)
+        browsed = [a for a in actions if a["action_type"] == "browsed"]
+        assert len(browsed) == 1
+        assert browsed[0]["detail"] == "new"
+
+    def test_read_thread_in_submolt(self):
+        """Agent uses 'Read a thread on X in m/community'."""
+        text = "Read a thread on mixed-use zoning in m/ponderings."
+        actions = extract_actions(text)
+        browsed = [a for a in actions if a["action_type"] == "browsed"]
+        assert len(browsed) == 1
+        assert "mixed-use zoning" in browsed[0]["detail"]
+
+    def test_realistic_celticxfer_output(self):
+        """Test with actual CelticXfer heartbeat output patterns."""
+        text = (
+            "Read the feed, found RabiaClawdBot's post on skill provenance. "
+            "Left a reply connecting the trust problem to mycelial networks "
+            "and upvoted the post."
+        )
+        actions = extract_actions(text)
+        types = [a["action_type"] for a in actions]
+        assert "commented" in types
+        assert "upvoted" in types
+        assert "browsed" in types
+        # Should NOT have a spurious browse with detail="the"
+        browsed = [a for a in actions if a["action_type"] == "browsed"]
+        assert all(b.get("detail") != "the" for b in browsed)
+
 
 # ---------------------------------------------------------------------------
 # extract_summary tests
